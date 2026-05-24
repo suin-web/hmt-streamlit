@@ -1,0 +1,11 @@
+﻿item_id,item_code,domain,related_rule_ids,cross_domain_generation,urgent_flag_item,urgent_flag_condition,question_generation_note
+LRN_A,학습-A,학업,RULE_LRN_A,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+LRN_B,학습-B,학업,RULE_LRN_B_EMO_B,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+LRN_C,학습-C,학업,RULE_LRN_C_ENV_B,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+EMO_A,정서-A,심리정서,RULE_EMO_A,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+EMO_B,정서-B,심리정서,RULE_LRN_B_EMO_B,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+EMO_C,정서-C,심리정서,RULE_EMO_C,Y,Y,score >= 1,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+ENV_A,환경-A,복지경제,RULE_ENV_A_CAR_B,Y,Y,score >= 1,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+ENV_B,환경-B,복지경제,RULE_LRN_C_ENV_B,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+CAR_A,진로-A,진로,RULE_CAR_A,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
+CAR_B,진로-B,진로,RULE_ENV_A_CAR_B,Y,N,,해당 문항이 체크되면 관련 심층 규칙의 linked_areas와 counseling_question_areas를 반영해 다른 영역 질문도 함께 생성
