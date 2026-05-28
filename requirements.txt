@@ -1,4 +1,12 @@
-streamlit>=1.31
-pandas>=2.0
-plotly>=5.0
-openpyxl>=3.1
+streamlit
+pandas
+openpyxl
+plotly
+google-genai
+python-dotenv
+chromadb
+sentence-transformers
+requests
+docxtpl
+python-docx
+lxml

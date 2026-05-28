@@ -1,0 +1,259 @@
+{
+  "version": "20260527_v3",
+  "purpose": "RAG 검색 후 Python 필터링·순위화 기준. JSONL은 조건 metadata를 담고, 실제 실행은 Python 코드에서 수행한다.",
+  "collections": {
+    "policy_chunks": "rag_policy_chunks_VECTOR_READY_20260527_v3.jsonl",
+    "service_catalog": "support_service_catalog_VECTOR_READY_20260527_v3.jsonl",
+    "resource_catalog": "rag_resource_catalog_VECTOR_READY_location_20260527_v3.jsonl"
+  },
+  "filtering": {
+    "support_area": {
+      "rule": "resource.filter_support_area_list contains primary_area OR contains 공통",
+      "mismatch": "exclude_or_secondary_candidate",
+      "note": "현재 기본 구현은 primary_area 중심. 필요 시 key_signals.linked_areas를 보조 후보로 확장 가능."
+    },
+    "school_level": {
+      "rule": "if resource.filter_school_level_list is known, selected_school_level must be included",
+      "unknown": "keep_with_confirmation_needed",
+      "mismatch": "exclude"
+    },
+    "district_range": {
+      "rule": "resource.filter_district_list intersects [school_district + adjacent_districts] OR filter_region_scope == 서울공통",
+      "adjacency_file": "district_adjacency_seoul_FILTER_READY_20260527_v3.json",
+      "mismatch": "exclude_from_default_candidates"
+    },
+    "existing_support": {
+      "rule": "if existing support type matches resource.existing_support_match_key or filter_service_type_ids, do not exclude; mark as 기존 지원 점검",
+      "mismatch": "normal_new_candidate"
+    },
+    "policy_chunks": {
+      "default": "filter_default_include == Y",
+      "note": "urgent_rule 청크는 기본 RAG 검색에서 제외하도록 태그만 부여함. 필요 시 별도 검색 가능."
+    }
+  },
+  "ranking": {
+    "total_score_max": 100,
+    "student_fit_score": {
+      "max": 80,
+      "method": "vector similarity between 상담 결과 기반 query and resource/service embedding_text. Chroma distance/cosine score must be normalized to 0~1, then multiplied by 80.",
+      "optional_boost": "service_type_ids or resource_category exact match can be included inside student_fit_score if desired."
+    },
+    "location_score": {
+      "max": 20,
+      "distance_method": "Haversine km using school latitude/longitude from general DB and resource latitude/longitude from metadata.",
+      "table": [
+        {
+          "condition": "same_district_and_distance_lte_3km",
+          "score": 20
+        },
+        {
+          "condition": "same_district",
+          "score": 18
+        },
+        {
+          "condition": "adjacent_district_and_distance_lte_5km",
+          "score": 16
+        },
+        {
+          "condition": "adjacent_district",
+          "score": 14
+        },
+        {
+          "condition": "citywide_seoul_resource",
+          "score": 10
+        },
+        {
+          "condition": "district_known_coordinates_missing",
+          "score": "same district 18 / adjacent 14"
+        },
+        {
+          "condition": "district_and_coordinates_missing",
+          "score": 8
+        },
+        {
+          "condition": "passes_filter_but_far",
+          "score": 5
+        }
+      ]
+    },
+    "final_score_formula": "recommendation_score = student_fit_score + location_score",
+    "display_tiers": [
+      {
+        "min": 85,
+        "label": "추천 적합도 높음"
+      },
+      {
+        "min": 70,
+        "label": "추천 적합도 보통"
+      },
+      {
+        "min": 55,
+        "label": "보조 검토"
+      },
+      {
+        "min": 0,
+        "label": "표시 제외 또는 낮은 우선순위"
+      }
+    ]
+  },
+  "district_adjacency_map": {
+    "종로구": [
+      "중구",
+      "동대문구",
+      "성북구",
+      "강북구",
+      "은평구",
+      "서대문구"
+    ],
+    "중구": [
+      "종로구",
+      "용산구",
+      "성동구",
+      "동대문구",
+      "서대문구",
+      "마포구"
+    ],
+    "용산구": [
+      "중구",
+      "성동구",
+      "마포구",
+      "영등포구",
+      "동작구",
+      "서초구"
+    ],
+    "성동구": [
+      "중구",
+      "용산구",
+      "광진구",
+      "동대문구",
+      "강남구"
+    ],
+    "광진구": [
+      "성동구",
+      "동대문구",
+      "중랑구",
+      "강남구",
+      "송파구",
+      "강동구"
+    ],
+    "동대문구": [
+      "종로구",
+      "중구",
+      "성동구",
+      "광진구",
+      "중랑구",
+      "성북구"
+    ],
+    "중랑구": [
+      "광진구",
+      "동대문구",
+      "성북구",
+      "노원구"
+    ],
+    "성북구": [
+      "종로구",
+      "동대문구",
+      "중랑구",
+      "강북구",
+      "노원구"
+    ],
+    "강북구": [
+      "종로구",
+      "성북구",
+      "도봉구",
+      "노원구"
+    ],
+    "도봉구": [
+      "강북구",
+      "노원구"
+    ],
+    "노원구": [
+      "중랑구",
+      "성북구",
+      "강북구",
+      "도봉구"
+    ],
+    "은평구": [
+      "종로구",
+      "서대문구",
+      "마포구"
+    ],
+    "서대문구": [
+      "종로구",
+      "중구",
+      "은평구",
+      "마포구"
+    ],
+    "마포구": [
+      "중구",
+      "용산구",
+      "은평구",
+      "서대문구",
+      "강서구",
+      "영등포구"
+    ],
+    "양천구": [
+      "강서구",
+      "구로구",
+      "영등포구"
+    ],
+    "강서구": [
+      "마포구",
+      "양천구",
+      "영등포구"
+    ],
+    "구로구": [
+      "양천구",
+      "금천구",
+      "영등포구",
+      "동작구",
+      "관악구"
+    ],
+    "금천구": [
+      "구로구",
+      "관악구"
+    ],
+    "영등포구": [
+      "용산구",
+      "마포구",
+      "양천구",
+      "강서구",
+      "구로구",
+      "동작구"
+    ],
+    "동작구": [
+      "용산구",
+      "구로구",
+      "영등포구",
+      "관악구",
+      "서초구"
+    ],
+    "관악구": [
+      "구로구",
+      "금천구",
+      "동작구",
+      "서초구"
+    ],
+    "서초구": [
+      "용산구",
+      "동작구",
+      "관악구",
+      "강남구"
+    ],
+    "강남구": [
+      "성동구",
+      "광진구",
+      "서초구",
+      "송파구"
+    ],
+    "송파구": [
+      "광진구",
+      "강남구",
+      "강동구"
+    ],
+    "강동구": [
+      "광진구",
+      "송파구"
+    ]
+  }
+}
