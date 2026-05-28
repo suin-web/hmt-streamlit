@@ -223,36 +223,12 @@ def validate_resource_recommendation_output(output_text: str, ranked_resources: 
             if r.get("linked_area") not in AREA_VALUES:
                 return {"ok": False, "message": "linked_area 값이 허용 범위가 아닙니다.", "parsed_data": None, "warnings": warnings}
 
-    # official_basis는 policy_evidence의 source_doc만 공식 근거로 인정한다.
-    # 모델이 service_catalog/resource_catalog 같은 collection 이름을 source_doc에 넣는 경우가 있어
-    # 화면 경고를 내기보다 해당 항목을 공식 근거 목록에서 제거하고, 요약은 추천 이유로 흡수한다.
-    known_docs = {str(x.get("source_doc", "")).strip() for x in policy_evidence if x.get("source_doc")}
-    collection_aliases = {
-        "service_catalog", "resource_catalog", "policy_chunks",
-        "서비스카탈로그", "서비스 카탈로그", "기관카탈로그", "기관 카탈로그",
-        "지역기관DB", "지역기관 DB", "RAG",
-    }
+    known_docs = {str(x.get("source_doc", "")) for x in policy_evidence if x.get("source_doc")}
     for r in parsed.get("recommended_resources", []) or []:
-        cleaned_basis = []
         for basis in r.get("official_basis", []) or []:
-            sd = str(basis.get("source_doc", "")).strip()
-            if not sd:
-                continue
-            if known_docs and sd in known_docs:
-                cleaned_basis.append(basis)
-                continue
-            if sd in collection_aliases or sd.endswith("_catalog"):
-                reason_text = str(basis.get("basis_summary") or basis.get("basis_title") or "").strip()
-                if reason_text:
-                    r.setdefault("recommendation_reasons", [])
-                    if reason_text not in r["recommendation_reasons"]:
-                        r["recommendation_reasons"].append(reason_text)
-                continue
-            # 알려진 공식 문서 목록이 있으면 확인되지 않은 source_doc은 공식 근거에서 제외한다.
-            # 후보 설명 자체는 유지하되, confusing warning은 만들지 않는다.
-            if not known_docs:
-                cleaned_basis.append(basis)
-        r["official_basis"] = cleaned_basis
+            sd = str(basis.get("source_doc", ""))
+            if sd and known_docs and sd not in known_docs:
+                warnings.append(f"공식 근거 source_doc 확인 필요: {sd}")
     return {"ok": True, "message": "검증 통과", "parsed_data": parsed, "warnings": warnings}
 
 
