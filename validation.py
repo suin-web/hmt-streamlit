@@ -115,6 +115,50 @@ def validate_counseling_analysis_output(output_text: str, teacher_counseling_not
     return {"ok": True, "message": "검증 통과", "parsed_data": parsed, "warnings": warnings}
 
 
+def _normalize_resource_name_for_validation(value: Any) -> str:
+    """기관명 검증용 정규화: 공백·특수문자 차이로 인한 불필요한 실패를 줄인다."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[\s\-_/()\[\]{}·.,]+", "", text)
+    return text
+
+
+def _is_blank_value(value: Any) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text == "" or text.lower() in {"none", "null", "nan"} or text in {"-", "정보 없음"}
+
+
+def _merge_ranked_resource_metadata(output_item: Dict[str, Any], ranked_item: Dict[str, Any]) -> Dict[str, Any]:
+    """LLM이 설명을 생성하더라도 기관 원천정보·순위·점수는 Python RAG 결과를 기준으로 고정한다."""
+    merged = dict(output_item)
+    copy_fields = [
+        "rank",
+        "resource_name",
+        "resource_category",
+        "support_area",
+        "district",
+        "education_office",
+        "address",
+        "phone",
+        "homepage",
+        "distance_km",
+        "recommendation_fit",
+        "recommendation_score",
+        "score_breakdown",
+        "existing_support_status",
+    ]
+    # 순위·기관명·점수·거리 등 원천값은 항상 RAG 결과를 우선한다.
+    for field in copy_fields:
+        if field in ranked_item:
+            merged[field] = ranked_item.get(field)
+    # linked_area는 LLM이 허용값을 주면 유지하고, 없거나 잘못되면 RAG support_area로 보정한다.
+    if merged.get("linked_area") not in AREA_VALUES:
+        candidate_area = ranked_item.get("support_area") or ranked_item.get("linked_area") or "공통"
+        merged["linked_area"] = candidate_area if candidate_area in AREA_VALUES else "공통"
+    return merged
+
+
 def validate_resource_recommendation_output(output_text: str, ranked_resources: List[Dict[str, Any]], policy_evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
     parsed, err = _parse_json(output_text)
     if err:
@@ -128,8 +172,10 @@ def validate_resource_recommendation_output(output_text: str, ranked_resources: 
     recs = parsed.get("recommended_resources")
     if not isinstance(recs, list):
         return {"ok": False, "message": "recommended_resources가 없습니다.", "parsed_data": None, "warnings": []}
+
+    warnings: List[str] = []
     input_names = [r.get("resource_name") for r in ranked_resources]
-    output_names = [r.get("resource_name") for r in recs]
+
     if not ranked_resources:
         noflag = parsed.get("if_no_suitable_resource", {}).get("no_resource_flag")
         if recs or not noflag:
@@ -137,17 +183,48 @@ def validate_resource_recommendation_output(output_text: str, ranked_resources: 
     else:
         if not recs:
             return {"ok": False, "message": "기관 후보가 있는데 추천 설명이 비어 있습니다.", "parsed_data": None, "warnings": []}
-        if output_names != input_names[: len(output_names)]:
-            return {"ok": False, "message": "추천 순서가 RAG 후보 순서와 다릅니다.", "parsed_data": None, "warnings": []}
-        for name in output_names:
-            if name not in input_names:
-                return {"ok": False, "message": f"입력 후보에 없는 기관명이 생성되었습니다: {name}", "parsed_data": None, "warnings": []}
+
+        ranked_by_norm: Dict[str, Dict[str, Any]] = {}
+        ranked_order: Dict[str, int] = {}
+        for idx, item in enumerate(ranked_resources):
+            norm = _normalize_resource_name_for_validation(item.get("resource_name"))
+            if norm:
+                ranked_by_norm[norm] = item
+                ranked_order[norm] = idx
+
+        normalized_output_names: List[str] = []
+        fixed_recs: List[Dict[str, Any]] = []
+        unknown_names: List[str] = []
         for r in recs:
+            norm = _normalize_resource_name_for_validation(r.get("resource_name"))
+            if norm not in ranked_by_norm:
+                unknown_names.append(str(r.get("resource_name")))
+                continue
+            normalized_output_names.append(norm)
+            fixed_recs.append(_merge_ranked_resource_metadata(r, ranked_by_norm[norm]))
+
+        if unknown_names:
+            return {"ok": False, "message": f"입력 후보에 없는 기관명이 생성되었습니다: {', '.join(unknown_names[:3])}", "parsed_data": None, "warnings": []}
+
+        # Gemini가 설명 순서를 바꾸는 경우가 있어, 실패시키지 않고 Python에서 RAG 순서로 재정렬한다.
+        original_order = list(normalized_output_names)
+        fixed_recs.sort(key=lambda x: ranked_order.get(_normalize_resource_name_for_validation(x.get("resource_name")), 9999))
+        fixed_order = [_normalize_resource_name_for_validation(x.get("resource_name")) for x in fixed_recs]
+        if original_order != fixed_order:
+            warnings.append("LLM 출력의 기관 순서가 RAG 후보 순서와 달라 Python에서 RAG 순서로 보정했습니다.")
+
+        # 상위 후보가 일부 누락된 경우는 실패 대신 경고 처리한다. 최종 순위는 포함된 후보 안에서 RAG 순서를 유지한다.
+        expected_prefix = [_normalize_resource_name_for_validation(x) for x in input_names[: len(fixed_recs)]]
+        if fixed_order != expected_prefix:
+            warnings.append("LLM 출력에 상위 RAG 후보 일부가 누락되었을 수 있습니다. 화면의 순위·점수·기관 정보는 RAG 결과를 기준으로 보정했습니다.")
+
+        parsed["recommended_resources"] = fixed_recs
+        for r in parsed["recommended_resources"]:
             if r.get("linked_area") not in AREA_VALUES:
-                return {"ok": False, "message": "linked_area 값이 허용 범위가 아닙니다.", "parsed_data": None, "warnings": []}
+                return {"ok": False, "message": "linked_area 값이 허용 범위가 아닙니다.", "parsed_data": None, "warnings": warnings}
+
     known_docs = {str(x.get("source_doc", "")) for x in policy_evidence if x.get("source_doc")}
-    warnings: List[str] = []
-    for r in recs:
+    for r in parsed.get("recommended_resources", []) or []:
         for basis in r.get("official_basis", []) or []:
             sd = str(basis.get("source_doc", ""))
             if sd and known_docs and sd not in known_docs:

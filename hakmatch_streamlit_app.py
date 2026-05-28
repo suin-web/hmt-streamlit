@@ -2068,11 +2068,30 @@ def filter_resource_candidates(candidates: List[Dict[str, Any]], primary_area: s
     return filtered, summary
 
 
+def get_first_coordinate_value(data: Dict[str, Any], keys: List[str]) -> Optional[float]:
+    """좌표 컬럼명이 서로 달라도 최대한 찾아서 float로 변환한다."""
+    if not isinstance(data, dict):
+        return None
+    for key in keys:
+        if key in data:
+            val = safe_float(data.get(key))
+            if val is not None:
+                return val
+    return None
+
+
+def format_distance_km(value: Any) -> str:
+    val = safe_float(value)
+    if val is None:
+        return "좌표 정보 없음"
+    return f"{val:.2f}km"
+
+
 def calculate_location_score(candidate: Dict[str, Any], selected_school_district: str, school_lat: Optional[float], school_lon: Optional[float], allowed_districts: List[str]) -> Tuple[float, Optional[float]]:
     meta = candidate.get("metadata", {}) or {}
     district = meta.get("district") or meta.get("자치구") or ""
-    lat = safe_float(meta.get("latitude") or meta.get("위도"))
-    lon = safe_float(meta.get("longitude") or meta.get("경도"))
+    lat = get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "기관위도", "y", "Y"])
+    lon = get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "기관경도", "x", "X"])
     distance = None
     if school_lat is not None and school_lon is not None and lat is not None and lon is not None:
         distance = haversine_km(school_lat, school_lon, lat, lon)
@@ -2092,8 +2111,8 @@ def calculate_location_score(candidate: Dict[str, Any], selected_school_district
 
 
 def rank_resource_candidates(filtered_candidates: List[Dict[str, Any]], selected_school_info: Dict[str, Any], allowed_districts: List[str]) -> List[Dict[str, Any]]:
-    school_lat = safe_float(selected_school_info.get("위도"))
-    school_lon = safe_float(selected_school_info.get("경도"))
+    school_lat = get_first_coordinate_value(selected_school_info, ["위도", "latitude", "lat", "school_latitude", "학교위도", "y", "Y"])
+    school_lon = get_first_coordinate_value(selected_school_info, ["경도", "longitude", "lon", "lng", "school_longitude", "학교경도", "x", "X"])
     district = selected_school_info.get("자치구", "")
     dedup: Dict[str, Dict[str, Any]] = {}
     for item in filtered_candidates:
@@ -2114,8 +2133,8 @@ def rank_resource_candidates(filtered_candidates: List[Dict[str, Any]], selected
             "address": address,
             "phone": phone,
             "homepage": meta.get("homepage") or meta.get("homepage_url") or meta.get("홈페이지") or "",
-            "latitude": safe_float(meta.get("latitude") or meta.get("위도")),
-            "longitude": safe_float(meta.get("longitude") or meta.get("경도")),
+            "latitude": get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "기관위도", "y", "Y"]),
+            "longitude": get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "기관경도", "x", "X"]),
             "distance_km": distance_km,
             "student_fit_score": round(student_fit, 1),
             "location_score": round(location_score, 1),
@@ -2245,7 +2264,7 @@ def render_rag_search_section() -> None:
                     <div style="font-weight:900;"><span class="recommend-rank">{r.get('rank')}</span>{r.get('resource_name')}</div>
                     <table class="info-table" style="margin-top:8px;">
                         <tr><th>기관유형</th><td>{r.get('resource_category')}</td><th>지원 영역</th><td>{r.get('support_area')}</td></tr>
-                        <tr><th>자치구</th><td>{r.get('district')}</td><th>거리</th><td>{r.get('distance_km')}</td></tr>
+                        <tr><th>자치구</th><td>{r.get('district')}</td><th>거리</th><td>{format_distance_km(r.get('distance_km'))}</td></tr>
                         <tr><th>주소</th><td colspan="3">{r.get('address')}</td></tr>
                         <tr><th>전화번호</th><td>{r.get('phone')}</td><th>홈페이지</th><td>{r.get('homepage')}</td></tr>
                         <tr><th>추천 적합도</th><td>{r.get('recommendation_fit')}</td><th>총점</th><td>{r.get('recommendation_score')}</td></tr>
@@ -2295,6 +2314,9 @@ def build_resource_recommendation_user_prompt(payload: Dict[str, Any]) -> str:
 아래 자료를 바탕으로 학생맞춤통합지원 지역기관 추천 설명을 생성하라.
 기관을 새로 찾지 말고 이미 RAG 검색과 Python 필터링·순위화를 통해 추려진 후보를 설명하라.
 ranked_resources 입력 순서를 반드시 유지하라.
+recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값을 글자 하나 바꾸지 말고 그대로 복사하라.
+기관 설명을 3개만 작성한다면 반드시 ranked_resources의 1순위, 2순위, 3순위 순서대로 작성하라.
+거리, 추천점수, 주소, 전화번호, 홈페이지는 새로 계산하거나 바꾸지 말고 ranked_resources 값을 그대로 사용하라.
 
 [상담 결과 구조화 정보]
 {_safe_json(payload.get('structured_counseling_analysis'))}
@@ -2430,7 +2452,7 @@ def render_resource_recommendation_section() -> None:
                         <tr><th>기관유형</th><td>{r.get('resource_category')}</td><th>서비스 유형</th><td>{r.get('service_type')}</td></tr>
                         <tr><th>지원 영역</th><td>{r.get('linked_area')}</td><th>추천 적합도</th><td>{r.get('recommendation_fit')}</td></tr>
                         <tr><th>주소</th><td colspan="3">{r.get('address')}</td></tr>
-                        <tr><th>전화번호</th><td>{r.get('phone')}</td><th>거리</th><td>{r.get('distance_km')}</td></tr>
+                        <tr><th>전화번호</th><td>{r.get('phone')}</td><th>거리</th><td>{format_distance_km(r.get('distance_km'))}</td></tr>
                         <tr><th>추천 이유</th><td colspan="3">{' / '.join(map(str, r.get('recommendation_reasons', [])))}</td></tr>
                         <tr><th>교사 확인사항</th><td colspan="3">{' / '.join(map(str, r.get('teacher_confirmation_items', [])))}</td></tr>
                         <tr><th>협의록 문장</th><td colspan="3">{r.get('meeting_record_sentence', '')}</td></tr>
@@ -2820,7 +2842,7 @@ def page_dashboard() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div class='panel'><div class='panel-title'>우선 검토 학생 목록</div>", unsafe_allow_html=True)
-        order = {"심층 파악 필요": 0, "주의 및 탐색": 1, "일상적 관찰": 2}
+        order = {"심층 파악 필요": 0, "심층 파악 권고": 1, "주의 및 탐색": 2, "일상적 관찰": 3}
         show = df[df["최종단계"].isin(["심층 파악 필요", "심층 파악 권고", "주의 및 탐색"])].copy()
         show["정렬"] = show["최종단계"].map(order)
         show["합계"] = show[SUPPORT_AREAS].sum(axis=1)
