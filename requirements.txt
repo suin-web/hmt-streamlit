@@ -10,3 +10,4 @@ requests
 docxtpl
 python-docx
 lxml
+protobuf==3.20.3
