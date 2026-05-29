@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import re
+import time
+import random
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -113,6 +115,33 @@ def _friendly_gemini_error(exc: Exception) -> str:
     return raw
 
 
+
+
+def _get_int_setting(key: str, default: int) -> int:
+    try:
+        value = _secret_get(key)
+        if value is None:
+            value = os.getenv(key)
+        if value is None or value == "":
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def _is_transient_503(exc: Exception) -> bool:
+    raw = str(exc)
+    return "UNAVAILABLE" in raw or "503" in raw or "high demand" in raw.lower()
+
+
+def _transient_retry_sleep(attempt: int) -> None:
+    # 503은 모델 서버 혼잡/일시 용량 부족일 때 발생하므로 짧은 지수 백오프를 적용한다.
+    # 무료 티어 quota 보호를 위해 기본 재시도 횟수는 낮게 둔다.
+    base = _get_int_setting("GEMINI_TRANSIENT_RETRY_BASE_SECONDS", 4)
+    delay = min(15, base * (2 ** attempt)) + random.uniform(0, 1.0)
+    time.sleep(delay)
+
+
 def call_llm(system_prompt: str, user_prompt: str, response_schema: Any = None) -> str:
     api_key = get_gemini_api_key()
     if not api_key:
@@ -135,14 +164,25 @@ def call_llm(system_prompt: str, user_prompt: str, response_schema: Any = None) 
         config_kwargs["response_schema"] = response_schema
 
     model = get_gemini_model()
-    _record_gemini_call(model)
 
-    response = client.models.generate_content(
-        model=model,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(**config_kwargs),
-    )
-    return strip_json_code_fence(extract_text_from_gemini_response(response))
+    max_transient_retries = _get_int_setting("GEMINI_TRANSIENT_RETRIES", 1)
+    last_exc = None
+    for attempt in range(max_transient_retries + 1):
+        try:
+            _record_gemini_call(model)
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(**config_kwargs),
+            )
+            return strip_json_code_fence(extract_text_from_gemini_response(response))
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_transient_retries and _is_transient_503(exc):
+                _transient_retry_sleep(attempt)
+                continue
+            raise
+    raise last_exc if last_exc is not None else RuntimeError("Gemini 호출에 실패했습니다.")
 
 
 def call_llm_with_validation(
@@ -152,7 +192,7 @@ def call_llm_with_validation(
     repair_prompt_builder: Callable[[str, str], str],
     validation_kwargs: Optional[Dict[str, Any]] = None,
     response_schema: Any = None,
-    max_retry: int = 0,
+    max_retry: int = 1,
 ) -> Dict[str, Any]:
     validation_kwargs = validation_kwargs or {}
     try:

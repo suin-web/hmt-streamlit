@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""학맞통 Streamlit 앱용 LLM JSON 출력 검증 함수 모음."""
+"""학생맞춤통합지원 Streamlit 앱용 LLM 출력 검증 함수 모음."""
 from __future__ import annotations
 
 import json
@@ -103,10 +103,10 @@ def validate_counseling_analysis_output(output_text: str, teacher_counseling_not
         return {"ok": False, "message": "key_signals는 리스트여야 합니다.", "parsed_data": None, "warnings": banned}
     rqs = parsed.get("rag_search_queries", [])
     if support == "지원 검토 필요" and len(rqs) < 2:
-        return {"ok": False, "message": "지원 검토 필요 상태에서는 RAG 검색어가 최소 2개 필요합니다.", "parsed_data": None, "warnings": banned}
+        return {"ok": False, "message": "지원 검토 필요 상태에서는 자료 검색어가 최소 2개 필요합니다.", "parsed_data": None, "warnings": banned}
     for q in rqs:
         if q.get("target_collection") not in TARGET_COLLECTIONS:
-            return {"ok": False, "message": "RAG 검색 target_collection 값이 허용 범위가 아닙니다.", "parsed_data": None, "warnings": banned}
+            return {"ok": False, "message": "자료 검색 대상 값이 허용 범위가 아닙니다.", "parsed_data": None, "warnings": banned}
     warnings = list(banned)
     for sig in parsed.get("key_signals", []):
         ev = str(sig.get("evidence_text", "")).strip()
@@ -262,19 +262,19 @@ def validate_document_generation_output(output_text: str, allowed_resource_names
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_notice", "urgent_reasons", "긴급확인"]):
-        return {"ok": False, "message": "문서 생성 단계에는 urgent 또는 긴급확인 관련 내용을 포함하지 않습니다.", "parsed_data": None, "warnings": []}
+        return {"ok": False, "message": "회의록 생성 단계에는 urgent 또는 긴급확인 관련 내용을 포함하지 않습니다.", "parsed_data": None, "warnings": []}
     banned = _contains_any(text, HARD_BANNED_COMMON)
     if banned:
         return {"ok": False, "message": f"금지 표현이 포함되었습니다: {', '.join(banned[:5])}", "parsed_data": None, "warnings": []}
-    if not isinstance(parsed.get("meeting_record"), dict) or not isinstance(parsed.get("student_growth_record"), dict):
-        return {"ok": False, "message": "meeting_record와 student_growth_record가 필요합니다.", "parsed_data": None, "warnings": []}
-    for field in ["agenda", "meeting_content", "decision_items", "followup_plan"]:
+    if not isinstance(parsed.get("meeting_record"), dict):
+        return {"ok": False, "message": "meeting_record가 필요합니다.", "parsed_data": None, "warnings": []}
+    for field in ["agenda", "meeting_content", "support_plan", "decision_items"]:
         if field not in parsed["meeting_record"]:
             return {"ok": False, "message": f"meeting_record.{field}가 없습니다.", "parsed_data": None, "warnings": []}
-    for field in ["student_difficulties", "internal_resource_summary", "external_resource_summary", "monthly_support_records", "comprehensive_evaluation", "closure_reason", "followup_items"]:
-        if field not in parsed["student_growth_record"]:
-            return {"ok": False, "message": f"student_growth_record.{field}가 없습니다.", "parsed_data": None, "warnings": []}
-    # 추천 결과에 없는 기관명 새 생성 방지: 매우 보수적 검사 대신 허용 기관이 텍스트에 포함되면 OK. 새 기관명 전체 식별은 warning 위주.
+    if parsed["meeting_record"].get("decision_items") not in ([], "", None):
+        return {"ok": False, "message": "meeting_record.decision_items는 회의 후 교사가 작성할 항목이므로 빈 리스트여야 합니다.", "parsed_data": None, "warnings": []}
+    if not isinstance(parsed["meeting_record"].get("support_plan"), list):
+        return {"ok": False, "message": "meeting_record.support_plan은 리스트여야 합니다.", "parsed_data": None, "warnings": []}
     warnings: List[str] = []
     phone_like = re.findall(r"\b0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}\b", text)
     if phone_like:

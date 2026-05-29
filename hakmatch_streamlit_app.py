@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-학맞통 AI 교사용 의사결정 보조 프로토타입 v3
+학생맞춤통합지원 AI 교사용 의사결정 보조 프로토타입
 
 실행:
     streamlit run hakmatch_streamlit_app.py
@@ -10,11 +10,11 @@
 - 상단 역할 전환: 담임교사 / 학생맞춤통합지원담당교원
 - 담임교사: 본인 반 학생만 조회
 - 학생맞춤통합지원담당교원: 전교 학생 상태 조회
-- 학교 정보 DB CSV 연결
+- 학교 정보 자료 연결
 - 1차 체크리스트 입력 → 점수 계산 → 맥락 보정 → 우선 확인 신호 확인
   → 심층 유도 분석 활성화 → 상담지 생성 고려 영역 산출
 - Gemini API 기반 2차 상담 질문 생성, 상담 메모 구조화, 기관 추천 이유 생성
-- Chroma DB 기반 RAG 검색, docx 템플릿 기반 협의록 및 학생성장기록지 생성
+- 검색 자료 기반 맞춤 검색, docx 템플릿 기반 회의록 생성
 
 주의:
 - 이 코드는 발표·시연용 MVP입니다.
@@ -55,7 +55,7 @@ except Exception:
 # 기본 설정
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="학맞통 AI | 교사용 지원 신호 대시보드",
+    page_title="학생맞춤통합지원 AI | 교사용 지원 신호 대시보드",
     page_icon="🧭",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -499,12 +499,12 @@ def normalize_area_list(value: Any) -> List[str]:
     return result
 
 # -----------------------------------------------------------------------------
-# 학교 DB 연결
+# 학교 자료 연결
 # -----------------------------------------------------------------------------
 def load_school_databases() -> Dict[str, Any]:
-    school_info_df, school_info_path, school_info_err = load_optional_csv(CSV_PATHS["school_info"], "학교 정보 DB")
-    school_context_df, school_context_path, school_context_err = load_optional_csv(CSV_PATHS["school_context"], "학교 맥락 점수 DB")
-    region_context_df, region_context_path, region_context_err = load_optional_csv(CSV_PATHS["region_context"], "지역 맥락 점수 DB")
+    school_info_df, school_info_path, school_info_err = load_optional_csv(CSV_PATHS["school_info"], "학교 정보 자료")
+    school_context_df, school_context_path, school_context_err = load_optional_csv(CSV_PATHS["school_context"], "학교 맥락 점수 자료")
+    region_context_df, region_context_path, region_context_err = load_optional_csv(CSV_PATHS["region_context"], "지역 맥락 점수 자료")
 
     errors = [x for x in [school_info_err, school_context_err, region_context_err] if x]
 
@@ -577,8 +577,8 @@ def school_row_to_dict(row: pd.Series) -> Dict[str, Any]:
                 continue
         return None
 
-    # 학교 DB에는 위도/경도 컬럼이 있으나, 기존 코드가 selected_school_info를 만들 때
-    # 해당 값을 제외하고 있어 RAG 접근성 거리 계산에서 학교 좌표를 찾지 못했다.
+    # 학교 자료에는 위도/경도 컬럼이 있으나, 기존 코드가 selected_school_info를 만들 때
+    # 해당 값을 제외하고 있어 접근성 거리 계산에서 학교 좌표를 찾지 못했다.
     # 여러 가능한 컬럼명을 표준 키와 별칭에 함께 저장해 이후 거리 계산 함수가 안정적으로 읽도록 한다.
     school_lat = first_number(["위도", "학교_위도", "학교위도", "latitude", "lat", "school_latitude", "Y", "y"])
     school_lon = first_number(["경도", "학교_경도", "학교경도", "longitude", "lon", "lng", "school_longitude", "X", "x"])
@@ -678,7 +678,7 @@ def generate_demo_students(school_name: str) -> pd.DataFrame:
                         "주요신호": signal,
                         "최종단계": final_stage,
                         "권장Action": "2차 상담 질문 활성화 및 전문 상담 검토" if final_stage == "심층 파악 필요" else ("교사 면담 및 가벼운 개입" if final_stage == "주의 및 탐색" else "현재 유지"),
-                        "담당자": "담임교사" if klass == DEFAULT_CLASS else "학맞통 담당",
+                        "담당자": "담임교사" if klass == DEFAULT_CLASS else "학생맞춤통합지원 담당",
                         "기한": str(date.today()) if final_stage != "일상적 관찰" else "-",
                     }
                 )
@@ -1196,7 +1196,7 @@ def build_counseling_payload(
             for r in active_deep_rules
         ],
         "counseling_consideration_areas": counseling_consideration_areas,
-        "instruction_for_next_step": "이 payload를 기반으로 교육청 체크리스트를 참고하여 2차 상담 질문을 생성한다.",
+        "instruction_for_next_step": "이 결과를 기반으로 교육청 체크리스트를 참고하여 2차 상담 질문을 생성한다.",
     }
     return payload
 
@@ -1213,7 +1213,7 @@ def render_header() -> None:
             <div class="edu-logo">
                 <span class="edu-symbol">학</span>
                 <div>
-                    <div>학맞통 AI</div>
+                    <div>학생맞춤통합지원 AI</div>
                     <div style="font-size:.74rem;color:#64748b;font-weight:700;">교사용 지원 신호 포털</div>
                 </div>
             </div>
@@ -1325,8 +1325,8 @@ def render_school_info_cards() -> None:
     school = st.session_state.selected_school_info
     cols = st.columns(5)
     values = [
-        ("학교 DB", school.get("학교명", "-"), school.get("학교급", "")),
-        ("학생 수", f"{int(school.get('학교_학생수', 0)):,}명" if school.get("학교_학생수", 0) else "-", "DB 기준"),
+        ("학교", school.get("학교명", "-"), school.get("학교급", "")),
+        ("학생 수", f"{int(school.get('학교_학생수', 0)):,}명" if school.get("학교_학생수", 0) else "-", "학교 자료 기준"),
         ("교원 1인당 학생수", f"{school.get('학교_교원1인당학생수', 0):.1f}명" if school.get("학교_교원1인당학생수", 0) else "-", "학교 여건"),
         ("위클래스", "있음" if school.get("위클래스_있음") else "없음", f"상담교사 {school.get('전문상담교사_수', 0)}명"),
         ("진로상담실", "있음" if school.get("진로상담실_있음") else "없음", f"보건교사 {school.get('보건교사_수', 0)}명"),
@@ -1335,29 +1335,48 @@ def render_school_info_cards() -> None:
         with col:
             st.markdown(metric_card(label, str(value), help_text), unsafe_allow_html=True)
 
-
-
 def render_summary_cards(result: Dict[str, Any]) -> None:
-    context_label = "적용" if result.get("context_adjustment_applied") else "미적용"
-    context_help = result.get("context_adjustment_reason", "")
+    stage = result.get("final_action_stage", "-")
+    action = result.get("final_action", "-")
+    areas = result.get("support_areas", []) or []
+    urgent = "있음" if result.get("urgent_flag") else "없음"
     cards = [
-        ("체크리스트 원점수", f"{result['raw_score']} / 20점", "1차 체크리스트 합산"),
-        ("체크리스트 환산점수", f"{result['scaled_score']} / 100점", "원점수 × 5"),
-        ("원점수 기준 단계", result["score_based_stage"], "기본 단계"),
-        ("우선 확인 필요 신호", "있음" if result.get("urgent_flag") else "없음", "Red Flag 참고"),
-        ("맥락 보정 적용 여부", context_label, context_help),
-        ("맥락 반영 심층확인 점수", f"{result['context_check_score']:g}" if result.get("context_adjustment_applied") else "미적용", "5~7점 구간에서만 적용"),
-        ("최종 안내 단계", result["final_action_stage"], result.get("final_action_reason", "")),
-        ("권장 Action", result["final_action"], "다음 조치"),
+        ("최종 안내 단계", stage, result.get("final_action_reason", "")),
+        ("권장 조치", action, "교사 검토용 안내"),
+        ("복합 지원 영역", ", ".join(areas) if areas else "현재 뚜렷한 우선 영역 없음", "상담과 지원 연계 시 함께 볼 영역"),
+        ("우선 확인 필요 신호", urgent, "해당 신호가 있으면 추가 확인을 우선 고려"),
     ]
-    rows = [st.columns(4), st.columns(4)]
-    idx = 0
-    for row_cols in rows:
-        for col in row_cols:
-            label, value, help_text = cards[idx]
-            with col:
-                st.markdown(metric_card(label, value, help_text), unsafe_allow_html=True)
-            idx += 1
+    cols = st.columns(4)
+    for col, (label, value, help_text) in zip(cols, cards):
+        with col:
+            st.markdown(metric_card(label, value, help_text), unsafe_allow_html=True)
+
+
+def render_compact_checklist_result(context_result: Dict[str, Any], red_flag_result: Dict[str, Any], counseling_areas: List[Dict[str, Any]]) -> None:
+    final_stage = context_result.get("final_action_stage", "-")
+    support_areas = [x.get("area") for x in counseling_areas if x.get("area") and x.get("area") != "긴급확인"]
+    # 중복 제거
+    seen = []
+    for a in support_areas:
+        if a not in seen:
+            seen.append(a)
+    summary_for_cards = {
+        "final_action_stage": final_stage,
+        "final_action_reason": context_result.get("final_action_reason", ""),
+        "final_action": context_result.get("final_action", "-"),
+        "urgent_flag": red_flag_result.get("urgent_flag", False),
+        "support_areas": seen,
+    }
+    render_summary_cards(summary_for_cards)
+    if final_stage == "일상적 관찰":
+        st.info("현재는 평소 관찰과 라포 형성을 유지하는 단계입니다.")
+    elif final_stage == "주의 및 탐색":
+        st.warning("일부 지원 신호가 관찰됩니다. 담임교사의 가벼운 면담과 추가 관찰을 권장합니다.")
+    elif final_stage == "심층 파악 권고":
+        st.warning("2차 상담 질문을 통해 학생의 최근 변화와 어려움을 한 번 더 확인하는 것이 권장됩니다.")
+    else:
+        st.error("심층 파악이 필요합니다. 다음 단계에서 2차 상담 질문을 생성할 수 있습니다.")
+
 
 def render_domain_score_table(domain_scores: pd.DataFrame, primary_areas: Optional[List[str]] = None) -> None:
     if domain_scores is None or domain_scores.empty:
@@ -1452,7 +1471,7 @@ def render_context_table(context_result: Dict[str, Any]) -> None:
 
 
 # -----------------------------------------------------------------------------
-# v3: Gemini, 상담 질문, 상담 메모 구조화, RAG, 기관 추천, 문서 생성
+# v3: Gemini, 상담 질문, 상담 메모 구조화, 기관 추천, 문서 생성
 # -----------------------------------------------------------------------------
 
 def load_json_with_fallback(paths: Iterable[Path]) -> Dict[str, Any]:
@@ -1650,12 +1669,12 @@ def render_counseling_question_section() -> None:
     active_deep_rules = st.session_state.get("active_deep_rules", [])
     counseling_areas = st.session_state.get("counseling_consideration_areas", [])
     if not first_check_result or not counseling_areas:
-        st.info("1차 체크리스트 결과와 상담 고려 영역이 생성되면 상담 질문을 만들 수 있습니다.")
+        st.info("체크리스트 결과 계산 후 상담 질문을 만들 수 있습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
     official_df, err = load_official_checklist_reference()
     if err:
-        st.warning(err)
+        st.warning("상담 질문 생성을 위한 참고 자료를 읽지 못했습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
     official_context = get_official_checklist_context(official_df, counseling_areas, red_flag_result)
@@ -1664,14 +1683,9 @@ def render_counseling_question_section() -> None:
     if activate:
         st.info("현재 결과에서는 2차 상담 질문 생성이 권장됩니다.")
     else:
-        st.caption("현재 최종 안내 단계에서는 필수는 아니지만, 교사가 필요하다고 판단하면 질문지를 생성해볼 수 있습니다.")
-    with st.expander("공식 교육청 체크리스트 참고 항목 보기", expanded=False):
-        show = pd.DataFrame(official_context)
-        if not show.empty:
-            cols = [c for c in ["ref_id", "criterion_type", "mapped_area_primary", "question_focus", "suggested_question_angle"] if c in show.columns]
-            st.dataframe(show[cols], use_container_width=True, hide_index=True)
+        st.caption("교사가 필요하다고 판단하면 상담 질문을 생성할 수 있습니다.")
     if not get_gemini_api_key():
-        st.warning("Gemini API 키가 설정되어 있지 않습니다. Streamlit secrets 또는 환경변수에 GEMINI_API_KEY를 설정해 주세요.")
+        st.warning("Gemini API 키가 설정되어 있지 않아 상담 질문을 생성할 수 없습니다.")
     if st.button("2차 상담 질문 생성하기", type="primary", use_container_width=True, key="btn_generate_questions"):
         if not get_gemini_api_key():
             st.warning("API 키가 설정되지 않아 상담 질문 생성을 실행할 수 없습니다.")
@@ -1686,7 +1700,7 @@ def render_counseling_question_section() -> None:
             }
             payload_hash = stable_payload_hash(payload)
             if use_cached_llm_result("generated_counseling_questions", "generated_counseling_questions_payload_hash", payload_hash):
-                st.info("같은 입력값으로 이미 생성된 상담 질문을 재사용합니다. API를 다시 호출하지 않았습니다.")
+                st.info("같은 입력값으로 이미 생성된 상담 질문을 재사용합니다.")
                 result = {"success": True, "data": st.session_state["generated_counseling_questions"], "warnings": []}
             else:
                 with st.spinner("2차 상담 질문을 생성하고 있습니다..."):
@@ -1700,44 +1714,32 @@ def render_counseling_question_section() -> None:
             if result["success"]:
                 save_llm_result("generated_counseling_questions", "generated_counseling_questions_payload_hash", payload_hash, result["data"])
                 st.success("2차 상담 질문 생성이 완료되었습니다.")
-                if result.get("warnings"):
-                    st.warning("검증 경고: " + " / ".join(map(str, result["warnings"][:3])))
             else:
                 st.error("상담 질문 생성에 실패했습니다: " + str(result.get("error")))
     data = st.session_state.get("generated_counseling_questions")
     if data:
-        st.markdown(f"<div class='callout'>{data.get('counseling_focus_summary', '')}</div>", unsafe_allow_html=True)
-        for q in data.get("recommended_questions", []):
+        summary = data.get("counseling_focus_summary", "")
+        if summary:
+            st.markdown(f"<div class='callout'>{summary}</div>", unsafe_allow_html=True)
+        for idx, q in enumerate(data.get("recommended_questions", []), start=1):
+            qid = q.get("question_id") or f"Q{idx}"
             st.markdown(
                 f"""
                 <div class="recommend-card">
-                    <div style="font-weight:900;">{q.get('question_id', '')}. {q.get('question', '')}</div>
-                    <table class="info-table" style="margin-top:8px;">
-                        <tr><th>질문 목적</th><td>{q.get('purpose', '')}</td></tr>
-                        <tr><th>연결 영역</th><td>{q.get('linked_area', '')}</td></tr>
-                        <tr><th>근거</th><td>{' / '.join(map(str, q.get('based_on', [])))}</td></tr>
-                        <tr><th>교사 유의사항</th><td>{q.get('teacher_caution', '')}</td></tr>
-                        <tr><th>추가 확인</th><td>{q.get('follow_up_if_needed', '')}</td></tr>
-                    </table>
+                    <div style="font-weight:900;font-size:1rem;">{qid}. {q.get('question', '')}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-        if data.get("teacher_recording_guide"):
-            st.write("상담 후 기록 가이드")
-            for item in data.get("teacher_recording_guide", []):
-                st.write("- " + str(item))
-        with st.expander("생성 결과 JSON 원본"):
-            st.json(data)
-        st.download_button(
-            "상담 질문 JSON 다운로드",
-            data=_safe_json(data).encode("utf-8-sig"),
-            file_name="counseling_questions_result.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+            with st.expander(f"{qid} 상세보기", expanded=False):
+                detail_rows = [
+                    {"항목": "질문 목적", "내용": q.get("purpose", "")},
+                    {"항목": "연결 영역", "내용": q.get("linked_area", "")},
+                    {"항목": "교사 유의사항", "내용": q.get("teacher_caution", "")},
+                    {"항목": "추가 확인", "내용": q.get("follow_up_if_needed", "")},
+                ]
+                st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 # ------------------------------ 상담 결과 분석 ------------------------------
 def build_counseling_analysis_payload(
@@ -1764,7 +1766,7 @@ def build_counseling_analysis_payload(
 def build_counseling_analysis_system_prompt() -> str:
     return """
 너는 학생맞춤통합지원 업무를 돕는 교사용 AI 상담 결과 분석 보조도구이다.
-교사가 입력한 2차 상담 결과 메모를 읽고 RAG 검색과 협의록 초안 생성에 사용할 수 있도록 핵심 정보를 구조화한다.
+교사가 입력한 2차 상담 결과 메모를 읽고 맞춤 검색과 협의록 초안 생성에 사용할 수 있도록 핵심 정보를 구조화한다.
 학생을 진단하거나 판정하지 말고, 상담 메모와 제공된 자료에 근거한 정보만 정리한다.
 이 단계에서는 urgent_flag, Red Flag, 긴급확인 분기를 사용하지 않는다.
 출력은 반드시 지정된 JSON 형식으로만 작성한다.
@@ -1774,7 +1776,7 @@ def build_counseling_analysis_system_prompt() -> str:
 def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
     return f"""
 아래 자료를 바탕으로 2차 상담 결과를 구조화하라.
-이 단계의 목적은 기관 추천이나 협의록 완성이 아니라, 다음 단계인 RAG 검색과 협의록 초안 생성을 위한 구조화된 입력값을 만드는 것이다.
+이 단계의 목적은 기관 추천이나 협의록 완성이 아니라, 다음 단계인 맞춤 검색과 협의록 초안 생성을 위한 구조화된 입력값을 만드는 것이다.
 이 단계에서는 urgent_flag, Red Flag, 긴급확인 분기를 사용하지 않는다.
 
 [1차 체크리스트 결과]
@@ -1811,7 +1813,7 @@ def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
     {{"signal": "주요 신호", "linked_areas": ["심리정서"], "evidence_text": "교사 상담 메모의 실제 표현", "interpretation": "검토 방향"}}
   ],
   "rag_search_queries": [
-    {{"query": "RAG 검색 질의", "target_collection": "policy_chunks / service_catalog / resource_catalog", "purpose": "검색 목적"}}
+    {{"query": "맞춤 검색 질의", "target_collection": "policy_chunks / service_catalog / resource_catalog", "purpose": "검색 목적"}}
   ],
   "meeting_record_inputs": {{
     "counseling_summary": "협의록용 상담 요약",
@@ -1839,11 +1841,11 @@ def build_counseling_analysis_repair_prompt(validation_error: str, previous_outp
 
 def render_counseling_analysis_section() -> None:
     st.markdown("<div class='panel'><div class='panel-title'>2차 상담 결과 분석</div>", unsafe_allow_html=True)
-    st.write("학생과 2차 상담을 진행한 뒤, 교사가 상담 결과를 자유롭게 기록하면 AI가 RAG 검색과 협의록 작성을 위한 구조화 정보를 생성합니다.")
+    st.write("학생과 2차 상담을 진행한 뒤, 상담 결과를 간단히 기록하면 지원 검토 방향을 정리합니다.")
     note = st.text_area(
         "2차 상담 결과 메모",
         value=st.session_state.get("teacher_counseling_note", ""),
-        placeholder="학생은 수업 시간에 엎드리는 이유가 잠을 잘 못 자서라고 말함. 친구들과 어울리는 것이 부담스럽고 쉬는 시간에는 혼자 있는 것이 편하다고 답함. 앞으로 하고 싶은 일은 잘 모르겠다고 말함.",
+        placeholder="예: 학생은 수업 시간에 엎드리는 이유가 잠을 잘 못 자서라고 말함. 친구들과 어울리는 것이 부담스럽고 쉬는 시간에는 혼자 있는 것이 편하다고 답함.",
         height=130,
         key="teacher_counseling_note_input",
     )
@@ -1877,7 +1879,7 @@ def render_counseling_analysis_section() -> None:
                 st.info("같은 상담 메모로 이미 분석된 결과를 재사용합니다. API를 다시 호출하지 않았습니다.")
                 result = {"success": True, "data": st.session_state["structured_counseling_analysis"], "warnings": []}
             else:
-                with st.spinner("상담 결과 메모를 구조화하고 있습니다..."):
+                with st.spinner("상담 결과를 분석하고 있습니다..."):
                     result = call_llm_with_validation(
                         build_counseling_analysis_system_prompt(),
                         build_counseling_analysis_user_prompt(payload),
@@ -1891,33 +1893,23 @@ def render_counseling_analysis_section() -> None:
                 st.session_state["teacher_support_judgment"] = judgment
                 st.session_state["existing_support_info"] = existing
                 st.success("상담 결과 분석이 완료되었습니다.")
-                if result.get("warnings"):
-                    st.warning("검증 경고: " + " / ".join(map(str, result["warnings"][:3])))
             else:
                 st.error("상담 결과 분석에 실패했습니다: " + str(result.get("error")))
     data = st.session_state.get("structured_counseling_analysis")
     if data:
         summ = data.get("analysis_summary", {})
-        st.markdown(f"<div class='callout'>{summ.get('one_sentence_summary', '')}</div>", unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
+        one_line = summ.get("support_needed_reason") or summ.get("one_sentence_summary") or "상담 결과를 바탕으로 추가 검토가 필요합니다."
+        target_areas = derive_integrated_support_areas(data)
+        c1, c2 = st.columns([1.2, 1])
         with c1:
-            st.markdown(metric_card("지원 필요 판단", summ.get("support_needed", "-"), summ.get("support_needed_reason", "")), unsafe_allow_html=True)
+            st.markdown(metric_card("지원 검토 안내", summ.get("support_needed", "-"), one_line), unsafe_allow_html=True)
         with c2:
-            st.markdown(metric_card("우선 지원 영역", data.get("primary_area", "-"), "RAG 서비스 카탈로그 검색 기준"), unsafe_allow_html=True)
-        if data.get("key_signals"):
-            st.dataframe(pd.DataFrame(data["key_signals"]), use_container_width=True, hide_index=True)
-        if data.get("rag_search_queries"):
-            st.dataframe(pd.DataFrame(data["rag_search_queries"]), use_container_width=True, hide_index=True)
-        with st.expander("협의록 입력 자료"):
-            st.json(data.get("meeting_record_inputs", {}))
-        with st.expander("분석 결과 JSON 원본"):
-            st.json(data)
-        st.download_button("상담 분석 JSON 다운로드", _safe_json(data).encode("utf-8-sig"), "structured_counseling_analysis.json", "application/json", use_container_width=True)
-        st.info("다음 단계에서는 이 구조화 결과의 primary_area, key_signals, rag_search_queries를 활용하여 공식 자료, 서비스 카탈로그, 지역기관 DB를 검색합니다.")
+            st.markdown(metric_card("복합 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), "함께 검토할 영역"), unsafe_allow_html=True)
+        st.caption("AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 돕는 참고자료입니다.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ------------------------------ RAG 검색 ------------------------------
+# ------------------------------ 맞춤 검색 ------------------------------
 EMBEDDING_MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-v1"
 
 
@@ -2020,7 +2012,7 @@ def ensure_chroma_db() -> Optional[Path]:
         import requests
         import zipfile
         tmp_zip = APP_DIR / "chroma_db.zip"
-        with st.spinner("GitHub Release에서 Chroma DB를 내려받고 있습니다..."):
+        with st.spinner("지원기관 추천 자료를 준비하고 있습니다..."):
             r = requests.get(zip_url, timeout=120)
             r.raise_for_status()
             tmp_zip.write_bytes(r.content)
@@ -2029,7 +2021,7 @@ def ensure_chroma_db() -> Optional[Path]:
         if chroma_dir.exists():
             return chroma_dir
     except Exception as exc:
-        st.error(f"Chroma DB zip 다운로드 또는 압축 해제에 실패했습니다: {exc}")
+        st.error(f"지원기관 추천 자료 준비에 실패했습니다: {exc}")
         return None
     return chroma_dir if chroma_dir.exists() else None
 
@@ -2103,7 +2095,7 @@ def extract_support_areas_from_metadata(metadata: Dict[str, Any]) -> List[str]:
 
 
 def normalize_target_areas(areas: Any) -> List[str]:
-    """RAG 검색·필터링에서 사용할 복합 지원 영역 리스트를 정리한다."""
+    """맞춤 검색·필터링에서 사용할 복합 지원 영역 리스트를 정리한다."""
     if areas is None:
         return []
     if isinstance(areas, str):
@@ -2121,9 +2113,9 @@ def normalize_target_areas(areas: Any) -> List[str]:
 
 
 def derive_integrated_support_areas(analysis: Dict[str, Any]) -> List[str]:
-    """상담 결과, 1차 체크리스트 고려 영역, 심층 유도 분석을 종합해 RAG에서 함께 볼 영역을 만든다.
+    """상담 결과, 1차 체크리스트 고려 영역, 심층 유도 분석을 종합해 추천 과정에서 함께 볼 영역을 만든다.
 
-    기존 구현은 analysis['primary_area'] 하나만 RAG 필터 기준으로 사용했다.
+    기존 구현은 analysis['primary_area'] 하나만 기관 추천 기준으로 사용했다.
     이 함수는 학생맞춤통합지원의 복합지원 취지에 맞게 primary_area 외에도
     key_signals.linked_areas, 상담 고려 영역, 심층 유도 분석의 linked_areas/counseling_question_areas,
     생성된 상담 질문의 areas_to_confirm를 함께 사용한다.
@@ -2487,12 +2479,12 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
         st.warning("학교 자치구 정보가 없어 지역 필터를 적용할 수 없습니다.")
     chroma_dir = ensure_chroma_db()
     if chroma_dir is None or not chroma_dir.exists():
-        st.error("chroma_db 폴더가 없습니다. GitHub Release zip URL을 CHROMA_DB_ZIP_URL에 설정하거나 chroma_db 폴더를 업로드해 주세요.")
+        st.error("지원기관 추천 자료를 찾을 수 없습니다. 관리자에게 문의해 주세요.")
         return None
     try:
         client = init_chroma_client_cached(str(chroma_dir))
     except Exception as exc:
-        st.error(f"Chroma DB 연결에 실패했습니다: {exc}")
+        st.error(f"검색 자료 연결에 실패했습니다: {exc}")
         return None
     adjacency = load_json_with_fallback(JSON_PATHS.get("district_adjacency", []))
     allowed_districts = get_allowed_districts(district, adjacency)
@@ -2559,12 +2551,77 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
     return results
 
 
+
+def generate_resource_recommendation_for_results(rag: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not rag or not st.session_state.get("structured_counseling_analysis"):
+        return None
+    if not rag.get("ranked_resources"):
+        st.session_state["resource_recommendation_explanation"] = {
+            "recommendation_summary": {"one_sentence_summary": "조건에 맞는 지역기관 후보가 부족합니다."},
+            "recommended_resources": [],
+            "if_no_suitable_resource": {"no_resource_flag": True, "reason": "조건에 맞는 지역기관 후보가 부족합니다.", "suggested_next_steps": []},
+        }
+        return st.session_state["resource_recommendation_explanation"]
+    if not get_gemini_api_key():
+        st.warning("API 키가 설정되지 않아 기관 추천 이유를 생성하지 못했습니다.")
+        return None
+    payload = build_resource_recommendation_payload(
+        st.session_state.get("structured_counseling_analysis", {}),
+        st.session_state.get("first_check_result", {}),
+        st.session_state.get("context_result", {}),
+        st.session_state.get("existing_support_info", "기존 지원 없음"),
+        rag,
+    )
+    payload_hash = stable_payload_hash(payload)
+    if use_cached_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash):
+        return st.session_state.get("resource_recommendation_explanation")
+    result = call_llm_with_validation(
+        build_resource_recommendation_system_prompt(),
+        build_resource_recommendation_user_prompt(payload),
+        validate_resource_recommendation_output,
+        build_resource_recommendation_repair_prompt,
+        validation_kwargs={"ranked_resources": rag.get("ranked_resources", []), "policy_evidence": rag.get("policy_evidence", [])},
+    )
+    if result.get("success"):
+        save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, result["data"])
+        return result["data"]
+    st.warning("기관 추천 이유 생성에 실패했습니다. 기관 후보는 표시되지만 추천 이유는 비어 있을 수 있습니다. " + str(result.get("error")))
+    return None
+
+
+def build_recommendation_reason_map() -> Dict[str, str]:
+    data = st.session_state.get("resource_recommendation_explanation") or {}
+    out: Dict[str, str] = {}
+    for r in data.get("recommended_resources", []) or []:
+        name = normalize_text(r.get("resource_name"))
+        reasons = r.get("recommendation_reasons", []) or []
+        if name:
+            out[name] = " / ".join(map(str, reasons)) if isinstance(reasons, list) else str(reasons)
+    return out
+
+
+def _resource_reason_map() -> Dict[str, str]:
+    data = st.session_state.get("resource_recommendation_explanation", {}) or {}
+    mapping: Dict[str, str] = {}
+    for item in data.get("recommended_resources", []) or []:
+        name = normalize_text(item.get("resource_name"))
+        if not name:
+            continue
+        reasons = item.get("recommendation_reasons", []) or []
+        if isinstance(reasons, list):
+            reason_text = " ".join([str(x) for x in reasons[:2] if x])
+        else:
+            reason_text = str(reasons)
+        mapping[re.sub(r"\s+", "", name)] = reason_text
+    return mapping
+
+
 def render_rag_search_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>RAG 기반 공식 근거·지역기관 후보 검색</div>", unsafe_allow_html=True)
-    st.write("상담 결과 분석에서 생성된 검색어를 바탕으로 공식 자료, 서비스 카탈로그, 지역기관 DB를 검색합니다.")
+    st.markdown("<div class='panel'><div class='panel-title'>지원기관 추천</div>", unsafe_allow_html=True)
+    st.write("상담 결과 분석을 바탕으로 학교 상황과 지역 여건에 맞는 지원기관 후보를 추천합니다.")
     analysis = st.session_state.get("structured_counseling_analysis")
     if not analysis:
-        st.info("2차 상담 결과 분석이 완료되면 RAG 검색을 실행할 수 있습니다.")
+        st.info("2차 상담 결과 분석이 완료되면 지원기관을 추천할 수 있습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
     school = st.session_state.get("selected_school_info", {})
@@ -2572,62 +2629,77 @@ def render_rag_search_section() -> None:
     allowed = get_allowed_districts(school.get("자치구", ""), adjacency)
     target_areas_preview = derive_integrated_support_areas(analysis)
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(metric_card("검토 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), "복합지원 기준"), unsafe_allow_html=True)
-    with c2: st.markdown(metric_card("학교 자치구", school.get("자치구", "-"), "지역 필터 기준"), unsafe_allow_html=True)
-    with c3: st.markdown(metric_card("학교급", school.get("학교급", "-"), "대상 필터 기준"), unsafe_allow_html=True)
-    with c4: st.markdown(metric_card("기존 지원", st.session_state.get("existing_support_info", "-"), "중복 지원 점검"), unsafe_allow_html=True)
-    st.caption("인접 자치구: " + (", ".join(allowed[1:]) if len(allowed) > 1 else "정보 없음"))
-    st.caption("RAG는 우선 지원 영역 1개만이 아니라 상담 고려 영역·심층 유도 분석·상담 질문 생성 결과를 합쳐 여러 지원 영역을 함께 검색합니다.")
-    school_lat = get_first_coordinate_value(school, ["위도", "latitude", "lat", "school_latitude", "학교위도", "학교_위도", "y", "Y"])
-    school_lon = get_first_coordinate_value(school, ["경도", "longitude", "lon", "lng", "school_longitude", "학교경도", "학교_경도", "x", "X"])
-    if school_lat is None or school_lon is None:
-        st.caption("학교 좌표: 학교 DB에서 위도/경도 값을 찾지 못해 거리 km는 표시되지 않을 수 있습니다.")
-    else:
-        st.caption(f"학교 좌표 확인: 위도 {school_lat:.6f}, 경도 {school_lon:.6f}")
-    if st.button("RAG 검색 실행하기", type="primary", use_container_width=True, key="btn_run_rag"):
-        with st.spinner("공식 근거와 지역기관 후보를 검색하고 있습니다..."):
-            run_rag_search()
+    with c1:
+        st.markdown(metric_card("복합 지원 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), "함께 고려"), unsafe_allow_html=True)
+    with c2:
+        st.markdown(metric_card("학교 자치구", school.get("자치구", "-"), "지역 기준"), unsafe_allow_html=True)
+    with c3:
+        st.markdown(metric_card("학교급", school.get("학교급", "-"), "대상 기준"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(metric_card("기존 지원", st.session_state.get("existing_support_info", "-"), "중복 지원 점검"), unsafe_allow_html=True)
+
+    if st.button("지원기관 추천하기", type="primary", use_container_width=True, key="btn_run_rag"):
+        with st.spinner("지원기관 후보를 찾고 추천 이유를 생성하고 있습니다..."):
+            st.session_state.pop("resource_recommendation_explanation", None)
+            st.session_state.pop("resource_recommendation_explanation_payload_hash", None)
+            st.session_state.pop("generated_document_json", None)
+            st.session_state.pop("generated_document_json_payload_hash", None)
+            st.session_state.pop("generated_docx_files", None)
+            results = run_rag_search()
+            if results and get_gemini_api_key():
+                payload = build_resource_recommendation_payload(
+                    st.session_state.get("structured_counseling_analysis", {}),
+                    st.session_state.get("first_check_result", {}),
+                    st.session_state.get("context_result", {}),
+                    st.session_state.get("existing_support_info", ""),
+                    results,
+                )
+                payload_hash = stable_payload_hash(payload)
+                if use_cached_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash):
+                    pass
+                else:
+                    ranked = results.get("ranked_resources", [])
+                    policy = results.get("policy_evidence", [])
+                    rec_result = call_llm_with_validation(
+                        build_resource_recommendation_system_prompt(),
+                        build_resource_recommendation_user_prompt(payload),
+                        validate_resource_recommendation_output,
+                        build_resource_recommendation_repair_prompt,
+                        validation_kwargs={"ranked_resources": ranked, "policy_evidence": policy},
+                    )
+                    if rec_result["success"]:
+                        save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, rec_result["data"])
+                    else:
+                        st.warning("추천 이유 생성에 실패했습니다. 기관 후보만 먼저 표시합니다: " + str(rec_result.get("error")))
+            elif results and not get_gemini_api_key():
+                st.warning("API 키가 설정되어 있지 않아 추천 이유는 표시하지 않습니다.")
+
     results = st.session_state.get("rag_search_results")
     if results:
-        st.write("공식 근거 검색 결과")
-        pe = pd.DataFrame(results.get("policy_evidence", []))
-        if not pe.empty:
-            cols = [c for c in ["title", "source_doc", "chunk_type", "support_area", "source_page", "text_summary"] if c in pe.columns]
-            st.dataframe(pe[cols], use_container_width=True, hide_index=True)
-        st.write("서비스 카탈로그 검색 결과")
-        sc = pd.DataFrame(results.get("service_catalog_results", []))
-        if not sc.empty:
-            cols = [c for c in ["service_type", "support_area", "recommended_conditions", "text_summary"] if c in sc.columns]
-            st.dataframe(sc[cols], use_container_width=True, hide_index=True)
-        st.write("지역기관 후보")
-        if not results.get("ranked_resources"):
-            st.warning("현재 필터 조건에서 적합한 기관 후보가 없습니다. 보조 영역 검색 또는 지역 범위 확장이 필요할 수 있습니다.")
-        for r in results.get("ranked_resources", []):
-            st.markdown(
-                f"""
-                <div class="recommend-card">
-                    <div style="font-weight:900;"><span class="recommend-rank">{r.get('rank')}</span>{r.get('resource_name')}</div>
-                    <table class="info-table" style="margin-top:8px;">
-                        <tr><th>기관유형</th><td>{r.get('resource_category')}</td><th>지원 영역</th><td>{r.get('support_area')}</td></tr>
-                        <tr><th>자치구</th><td>{r.get('district')}</td><th>거리</th><td>{format_distance_km(r.get('distance_km'))}</td></tr>
-                        <tr><th>주소</th><td colspan="3">{r.get('address')}</td></tr>
-                        <tr><th>전화번호</th><td>{r.get('phone')}</td><th>홈페이지</th><td>{r.get('homepage')}</td></tr>
-                        <tr><th>추천 적합도</th><td>{r.get('recommendation_fit')}</td><th>총점</th><td>{r.get('recommendation_score')}</td></tr>
-                        <tr><th>학생 상황 적합도</th><td>{r.get('student_fit_score')}</td><th>지역·접근성</th><td>{r.get('location_score')}</td></tr>
-                        <tr><th>기존 지원 상태</th><td colspan="3">{r.get('existing_support_status')}</td></tr>
-                    </table>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with st.expander("상세 점수 및 필터링 로그"):
-            st.json(results.get("filter_debug_summary", {}))
-            st.json(results.get("ranked_resources", []))
-        with st.expander("RAG 검색 결과 JSON 원본"):
-            st.json(results)
-        st.download_button("RAG 검색 결과 JSON 다운로드", _safe_json(results).encode("utf-8-sig"), "rag_search_results.json", "application/json", use_container_width=True)
+        resources = results.get("ranked_resources", [])
+        if not resources:
+            st.warning("현재 조건에서 바로 제시할 수 있는 기관 후보가 부족합니다. 보조 영역 검토 또는 지역 범위 확장이 필요할 수 있습니다.")
+        else:
+            reason_map = _resource_reason_map()
+            rows = []
+            for r in resources:
+                name = normalize_text(r.get("resource_name"))
+                rows.append({
+                    "순위": r.get("rank"),
+                    "기관명": name,
+                    "기관유형": r.get("resource_category"),
+                    "지원 영역": ", ".join(r.get("matched_support_areas", []) or normalize_area_list(r.get("support_area"))) or r.get("support_area"),
+                    "자치구": r.get("district"),
+                    "거리": format_distance_km(r.get("distance_km")),
+                    "주소": r.get("address"),
+                    "전화번호": r.get("phone"),
+                    "홈페이지": r.get("homepage"),
+                    "기존 지원 상태": r.get("existing_support_status"),
+                    "추천 이유": reason_map.get(re.sub(r"\s+", "", name), ""),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.caption("추천기관은 교사와 학교 협의체가 검토할 후보입니다. 실제 연계 전 기관 운영 여부와 보호자 동의 여부를 확인해 주세요.")
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 # ------------------------------ 기관 추천 이유 생성 ------------------------------
 def build_resource_recommendation_payload(structured_counseling_analysis: Dict[str, Any], first_check_result: Dict[str, Any], context_result: Dict[str, Any], existing_support_info: str, rag_search_results: Dict[str, Any]) -> Dict[str, Any]:
@@ -2658,7 +2730,7 @@ def build_resource_recommendation_system_prompt() -> str:
 def build_resource_recommendation_user_prompt(payload: Dict[str, Any]) -> str:
     return f"""
 아래 자료를 바탕으로 학생맞춤통합지원 지역기관 추천 설명을 생성하라.
-기관을 새로 찾지 말고 이미 RAG 검색과 Python 필터링·순위화를 통해 추려진 후보를 설명하라.
+기관을 새로 찾지 말고 이미 맞춤 검색과 Python 필터링·순위화를 통해 추려진 후보를 설명하라.
 ranked_resources 입력 순서를 반드시 유지하라.
 recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값을 글자 하나 바꾸지 말고 그대로 복사하라.
 기관 설명을 3개만 작성한다면 반드시 ranked_resources의 1순위, 2순위, 3순위 순서대로 작성하라.
@@ -2679,17 +2751,17 @@ recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값
 [복합 검토 지원 영역]
 {_safe_json(payload.get('target_areas'))}
 
-[RAG 검색 결과: 공식 근거]
+[맞춤 검색 결과: 공식 근거]
 {_safe_json(payload.get('policy_evidence'))}
 
-[RAG 검색 결과: 서비스 카탈로그 후보]
+[맞춤 검색 결과: 서비스 카탈로그 후보]
 {_safe_json(payload.get('service_catalog_results'))}
 
-[RAG 검색 결과: 지역기관 후보]
+[맞춤 검색 결과: 지역기관 후보]
 {_safe_json(payload.get('ranked_resources'))}
 
 [공식 근거 작성 규칙]
-- official_basis는 반드시 위 [RAG 검색 결과: 공식 근거]에 있는 policy_evidence에서만 작성한다.
+- official_basis는 반드시 위 [맞춤 검색 결과: 공식 근거]에 있는 policy_evidence에서만 작성한다.
 - official_basis.source_doc에는 policy_evidence의 source_doc 값을 그대로 복사한다.
 - service_catalog, resource_catalog, 기관 후보명, 서비스 카탈로그명은 official_basis.source_doc에 쓰지 않는다.
 - 서비스 카탈로그와 기관 후보에서 얻은 내용은 recommendation_reasons, teacher_confirmation_items, location_or_access_basis에만 반영한다.
@@ -2732,7 +2804,7 @@ recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값
   ],
   "if_no_suitable_resource": {{"no_resource_flag": false, "reason": "", "suggested_next_steps": []}},
   "overall_teacher_checklist": ["추천 전 확인사항 1", "확인사항 2", "확인사항 3"],
-  "rag_trace_summary": {{"used_policy_chunks": [], "used_service_catalog_items": [], "used_resource_candidates": [], "note": "제공된 RAG 결과 안에서만 작성"}},
+  "rag_trace_summary": {{"used_policy_chunks": [], "used_service_catalog_items": [], "used_resource_candidates": [], "note": "제공된 맞춤 검색 결과 안에서만 작성"}},
   "safety_and_ethics_note": "AI 추천은 자동 결정이 아니라 교사와 학교 협의체 검토를 위한 참고자료입니다."
 }}
 """.strip()
@@ -2740,7 +2812,7 @@ recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값
 
 def build_resource_recommendation_repair_prompt(validation_error: str, previous_output: str) -> str:
     return f"""
-이전 출력은 RAG 기반 기관 추천 설명 조건을 충족하지 못했습니다.
+이전 출력은 맞춤 지원기관 추천 설명 조건을 충족하지 못했습니다.
 검증 실패 사유: {validation_error}
 반드시 JSON 형식으로만 다시 작성하세요.
 ranked_resources에 제공된 기관 후보 안에서만 작성하고, 기관명·주소·전화번호·홈페이지를 새로 만들지 말고, 추천 순서를 바꾸지 마세요.
@@ -2752,86 +2824,8 @@ Red Flag, urgent_flag, urgent_notice, 긴급확인 관련 내용은 출력하지
 
 
 def render_resource_recommendation_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>AI 기관 추천 이유 설명</div>", unsafe_allow_html=True)
-    st.write("RAG 검색과 필터링·순위화 결과를 바탕으로, 교사가 검토할 수 있는 기관 추천 이유와 확인사항을 생성합니다.")
-    if not st.session_state.get("rag_search_results"):
-        st.info("먼저 RAG 검색을 실행해 주세요.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-    if not st.session_state.get("structured_counseling_analysis"):
-        st.warning("먼저 2차 상담 결과 분석을 실행해 주세요.")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-    if not get_gemini_api_key():
-        st.warning("Gemini API 키가 설정되어 있지 않습니다. Streamlit secrets 또는 환경변수에 GEMINI_API_KEY를 설정해 주세요.")
-    if st.button("기관 추천 이유 생성하기", type="primary", use_container_width=True, key="btn_resource_reason"):
-        if not get_gemini_api_key():
-            st.warning("API 키가 설정되지 않아 기관 추천 이유 생성을 실행할 수 없습니다.")
-        else:
-            rag = st.session_state["rag_search_results"]
-            payload = build_resource_recommendation_payload(
-                st.session_state.get("structured_counseling_analysis", {}),
-                st.session_state.get("first_check_result", {}),
-                st.session_state.get("context_result", {}),
-                st.session_state.get("existing_support_info", "기존 지원 없음"),
-                rag,
-            )
-            payload_hash = stable_payload_hash(payload)
-            if use_cached_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash):
-                st.info("같은 RAG 후보로 이미 생성된 기관 추천 이유를 재사용합니다. API를 다시 호출하지 않았습니다.")
-                result = {"success": True, "data": st.session_state["resource_recommendation_explanation"], "warnings": []}
-            else:
-                with st.spinner("기관 추천 이유를 생성하고 있습니다..."):
-                    result = call_llm_with_validation(
-                        build_resource_recommendation_system_prompt(),
-                        build_resource_recommendation_user_prompt(payload),
-                        validate_resource_recommendation_output,
-                        build_resource_recommendation_repair_prompt,
-                        validation_kwargs={"ranked_resources": rag.get("ranked_resources", []), "policy_evidence": rag.get("policy_evidence", [])},
-                    )
-            if result["success"]:
-                save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, result["data"])
-                st.success("기관 추천 이유 설명 생성이 완료되었습니다.")
-                if result.get("warnings"):
-                    st.warning("검증 경고: " + " / ".join(map(str, result["warnings"][:3])))
-            else:
-                st.error("기관 추천 이유 생성에 실패했습니다: " + str(result.get("error")))
-    data = st.session_state.get("resource_recommendation_explanation")
-    if data:
-        summ = data.get("recommendation_summary", {})
-        st.markdown(f"<div class='callout'>{summ.get('one_sentence_summary', '')}</div>", unsafe_allow_html=True)
-        if data.get("if_no_suitable_resource", {}).get("no_resource_flag"):
-            st.warning(data.get("if_no_suitable_resource", {}).get("reason", "후보가 부족합니다."))
-            for step in data.get("if_no_suitable_resource", {}).get("suggested_next_steps", []):
-                st.write("- " + str(step))
-        for r in data.get("recommended_resources", []):
-            st.markdown(
-                f"""
-                <div class="recommend-card">
-                    <div style="font-weight:900;"><span class="recommend-rank">{r.get('rank')}</span>{r.get('resource_name')}</div>
-                    <table class="info-table" style="margin-top:8px;">
-                        <tr><th>기관유형</th><td>{r.get('resource_category')}</td><th>서비스 유형</th><td>{r.get('service_type')}</td></tr>
-                        <tr><th>지원 영역</th><td>{r.get('linked_area')}</td><th>추천 적합도</th><td>{r.get('recommendation_fit')}</td></tr>
-                        <tr><th>주소</th><td colspan="3">{r.get('address')}</td></tr>
-                        <tr><th>전화번호</th><td>{r.get('phone')}</td><th>거리</th><td>{format_distance_km(r.get('distance_km'))}</td></tr>
-                        <tr><th>추천 이유</th><td colspan="3">{' / '.join(map(str, r.get('recommendation_reasons', [])))}</td></tr>
-                        <tr><th>교사 확인사항</th><td colspan="3">{' / '.join(map(str, r.get('teacher_confirmation_items', [])))}</td></tr>
-                        <tr><th>협의록 문장</th><td colspan="3">{r.get('meeting_record_sentence', '')}</td></tr>
-                    </table>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        if data.get("overall_teacher_checklist"):
-            st.write("공통 교사 확인사항")
-            for x in data.get("overall_teacher_checklist", []): st.write("- " + str(x))
-        with st.expander("RAG 추적 요약"):
-            st.json(data.get("rag_trace_summary", {}))
-        with st.expander("기관 추천 설명 JSON 원본"):
-            st.json(data)
-        st.download_button("기관 추천 설명 JSON 다운로드", _safe_json(data).encode("utf-8-sig"), "resource_recommendation_explanation.json", "application/json", use_container_width=True)
-        st.info("다음 단계에서는 이 기관 추천 설명과 상담 결과 분석 내용을 공식 서식에 맞춰 협의록 초안으로 생성합니다.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    # 기관 추천 이유는 맞춤 지원기관 검색 버튼을 누를 때 자동으로 생성되어 기관 표에 함께 표시됩니다.
+    return
 
 
 # ------------------------------ 문서 생성 ------------------------------
@@ -2845,21 +2839,20 @@ def build_document_generation_payload(structured_counseling_analysis: Dict[str, 
         "recommended_resources": resource_recommendation_explanation.get("recommended_resources", []),
     }
 
-
 def build_document_generation_system_prompt() -> str:
     return """
-너는 학생맞춤통합지원 업무를 돕는 문서 초안 작성 보조도구이다.
-제공된 1차 체크리스트 결과, 상담 결과 분석, RAG 기관 추천 설명, 공식 근거를 바탕으로 정해진 문서 서식의 서술형 내용을 작성한다.
-개인정보를 생성하거나 추정하지 않고, 기관명은 제공된 추천기관 결과 안에서만 사용한다.
-학생을 진단하거나 판정하지 않으며, 협의체가 검토할 초안으로 작성한다.
+너는 학생맞춤통합지원 업무를 돕는 회의록 초안 작성 보조도구이다.
+제공된 1차 체크리스트 결과, 상담 결과 분석, 지원기관 추천 설명, 공식 근거를 바탕으로 통합지원팀 회의록에 들어갈 서술형 내용을 작성한다.
+학생을 진단하거나 판정하지 않는다. 교사의 최종 판단을 대체하지 않는다.
+제공된 자료에 없는 사실, 기관명, 연락처, 주소, 제도명을 새로 만들지 않는다.
+개인정보를 생성하거나 추정하지 않는다. Red Flag, urgent_flag, 긴급확인 관련 표현은 사용하지 않는다.
 출력은 반드시 지정된 JSON 형식으로만 작성한다.
 """.strip()
 
-
 def build_document_generation_user_prompt(payload: Dict[str, Any]) -> str:
     return f"""
-아래 자료를 바탕으로 협의록과 학생성장기록지에 들어갈 서술형 내용을 JSON으로 작성하라.
-개인정보는 제공하지 않는다. 학생명, 생년월일, 연락처, 주소는 Python이 나중에 직접 삽입한다.
+아래 자료를 바탕으로 통합지원팀 회의록에 들어갈 서술형 내용을 JSON으로 작성하라.
+개인정보는 제공하지 않는다. 학생명, 생년월일, 연락처, 주소는 생성하지 않는다.
 기관명은 제공된 추천기관 안에서만 사용한다.
 
 [문서 생성 대상]
@@ -2871,51 +2864,80 @@ def build_document_generation_user_prompt(payload: Dict[str, Any]) -> str:
 [상담 결과 분석]
 {_safe_json(payload.get('structured_counseling_analysis'))}
 
-[RAG 기관 추천 설명]
+[지원기관 추천 설명]
 {_safe_json(payload.get('resource_recommendation_explanation'))}
 
 [공식 근거 및 추천기관]
-{_safe_json(payload.get('rag_search_results'))}
+{_safe_json({'policy_evidence': payload.get('policy_evidence'), 'recommended_resources': payload.get('recommended_resources')})}
 
 출력 JSON 형식:
 {{
   "meeting_record": {{
     "agenda": "회의 안건 초안",
     "meeting_content": "대상 학생 협의 내용 초안",
-    "decision_items": ["결정사항 1", "결정사항 2"],
-    "followup_plan": ["향후계획 1", "향후계획 2"]
-  }},
-  "student_growth_record": {{
-    "student_difficulties": "학생의 어려움 서술 초안",
-    "internal_resource_summary": "내부자원 활용 방향 서술",
-    "external_resource_summary": "외부자원 연계 방향 서술",
-    "monthly_support_records": [
-      {{"month": "3월", "content": "맞춤지원 현황 초안"}},
-      {{"month": "4월", "content": ""}},
-      {{"month": "5월", "content": ""}},
-      {{"month": "6월", "content": ""}}
+    "support_plan": [
+      "지원계획 1",
+      "지원계획 2"
     ],
-    "comprehensive_evaluation": "학생성장 종합평가 초안",
-    "closure_reason": "학생지원 종결사유 또는 지속관리 필요 사유 초안",
-    "followup_items": ["후속관리 항목 1", "후속관리 항목 2"]
+    "decision_items": []
   }},
   "safety_and_ethics_note": "AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 위한 초안입니다."
 }}
-""".strip()
 
+주의:
+- support_plan에는 기존 버전의 결정사항에 들어가던 지원 실행 계획을 작성한다.
+- decision_items는 반드시 빈 리스트 []로 둔다. 최종 결정사항은 회의 후 교사가 직접 작성한다.
+""".strip()
 
 def build_document_generation_repair_prompt(validation_error: str, previous_output: str) -> str:
     return f"""
-이전 출력은 문서 생성 조건을 충족하지 못했습니다.
+이전 출력은 회의록 생성 조건을 충족하지 못했습니다.
 검증 실패 사유: {validation_error}
-반드시 JSON 형식으로만 다시 작성하세요. meeting_record와 student_growth_record 및 필수 필드를 모두 포함하세요.
-개인정보를 생성하거나 추정하지 말고, 기관명은 제공된 추천기관 목록 안에서만 사용하세요.
-Red Flag, urgent_flag, 긴급확인 관련 내용은 출력하지 마세요.
+아래 조건을 반드시 반영하여 다시 작성하세요.
+1. 반드시 JSON 형식으로만 출력할 것
+2. meeting_record를 포함할 것
+3. meeting_record에는 agenda, meeting_content, support_plan, decision_items를 포함할 것
+4. decision_items는 빈 리스트 []로 둘 것
+5. 기관명은 제공된 추천기관 목록 안에서만 사용할 것
+6. 개인정보를 생성하거나 추정하지 말 것
+7. 학생을 진단하거나 낙인찍는 표현을 쓰지 말 것
+8. Red Flag, urgent_flag, 긴급확인 관련 내용은 출력하지 말 것
 
 [이전 출력]
 {previous_output}
 """.strip()
 
+
+def validate_meeting_generation_output(output_text: str, allowed_resource_names: Optional[List[str]] = None) -> Dict[str, Any]:
+    try:
+        data = json.loads(strip_json_code_fence_local(output_text))
+    except Exception as exc:
+        return {"ok": False, "message": f"JSON 형식이 올바르지 않습니다: {exc}", "parsed_data": None, "warnings": []}
+    if not isinstance(data, dict):
+        return {"ok": False, "message": "출력은 JSON 객체여야 합니다.", "parsed_data": None, "warnings": []}
+    mr = data.get("meeting_record")
+    if not isinstance(mr, dict):
+        return {"ok": False, "message": "meeting_record가 필요합니다.", "parsed_data": None, "warnings": []}
+    for field in ["agenda", "meeting_content", "support_plan", "decision_items"]:
+        if field not in mr:
+            return {"ok": False, "message": f"meeting_record.{field} 필드가 필요합니다.", "parsed_data": None, "warnings": []}
+    if not isinstance(mr.get("support_plan"), list):
+        return {"ok": False, "message": "support_plan은 리스트여야 합니다.", "parsed_data": None, "warnings": []}
+    if mr.get("decision_items") not in ([], None):
+        return {"ok": False, "message": "decision_items는 회의 후 교사가 작성하므로 빈 리스트여야 합니다.", "parsed_data": None, "warnings": []}
+    text = _safe_json(data)
+    banned = [w for w in HARD_BANNED_COMMON if w in text]
+    if banned:
+        return {"ok": False, "message": "금지 표현이 포함되었습니다: " + ", ".join(banned), "parsed_data": None, "warnings": []}
+    data.setdefault("safety_and_ethics_note", "AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 위한 초안입니다.")
+    mr["decision_items"] = []
+    return {"ok": True, "message": "검증 통과", "parsed_data": data, "warnings": []}
+
+
+def strip_json_code_fence_local(text: str) -> str:
+    t = str(text or "").strip()
+    m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", t, flags=re.IGNORECASE | re.DOTALL)
+    return m.group(1).strip() if m else t
 
 def _set_cell_text(cell: Any, text: str) -> None:
     cell.text = str(text or "")
@@ -2927,41 +2949,6 @@ def _join_list(values: Any) -> str:
     return str(values or "")
 
 
-def build_checkbox_values_from_ui() -> Dict[str, bool]:
-    checkbox_defs = {
-        "성별": [("G1", "남"), ("G2", "여")],
-        "기초수급 보장현황": [("W1", "기초수급"), ("W2", "생계"), ("W3", "의료"), ("W4", "주거"), ("W5", "교육"), ("W6", "법정한부모"), ("W7", "법정차상위"), ("W8", "기타저소득"), ("W9", "일반")],
-        "가족현황": [("F1", "한부모(부)"), ("F2", "한부모(모)"), ("F3", "조부모(부)"), ("F4", "조부모(모)"), ("F5", "부모가정"), ("F6", "조부모가정"), ("F7", "새혼가정"), ("F8", "기타")],
-        "학생현황": [("S1", "이주배경"), ("S2", "특수교육대상"), ("S3", "기타")],
-        "내부자원": [("I1", "학습"), ("I2", "진로"), ("I3", "심리·정서"), ("I4", "복지·경제"), ("I5", "기타")],
-        "외부자원": [("O1", "학습"), ("O2", "진로"), ("O3", "심리·정서"), ("O4", "복지·경제"), ("O5", "기타")],
-    }
-    values: Dict[str, bool] = {}
-    for group, items in checkbox_defs.items():
-        st.write(group)
-        cols = st.columns(min(4, len(items)))
-        for i, (code, label) in enumerate(items):
-            with cols[i % len(cols)]:
-                values[code] = st.checkbox(label, key=f"doc_checkbox_{code}")
-    return values
-
-
-def replace_checkbox_markers_with_unicode_fallback(docx_path: Path, checkbox_values: Dict[str, bool]) -> None:
-    from docx import Document
-    doc = Document(str(docx_path))
-    for p in doc.paragraphs:
-        for code, checked in checkbox_values.items():
-            p.text = p.text.replace(f"[{code}]", "☑" if checked else "☐")
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    for code, checked in checkbox_values.items():
-                        if f"[{code}]" in p.text:
-                            p.text = p.text.replace(f"[{code}]", "☑" if checked else "☐")
-    doc.save(str(docx_path))
-
-
 def fill_meeting_docx(template_path: Path, output_path: Path, basic: Dict[str, Any], llm_result: Dict[str, Any]) -> None:
     from docx import Document
     import shutil
@@ -2969,59 +2956,20 @@ def fill_meeting_docx(template_path: Path, output_path: Path, basic: Dict[str, A
     doc = Document(str(output_path))
     mr = llm_result.get("meeting_record", {})
     table = doc.tables[0]
-    table.cell(0, 0).text = f"제({basic.get('meeting_round', '')})차 통합지원팀 회의록"
+    # 새 서식: 제목에 회차 없음, 지원계획/결정사항 칸 사용
+    # 제목은 템플릿 서식을 그대로 유지합니다.
     table.cell(2, 1).text = basic.get("meeting_date", "")
     table.cell(2, 3).text = basic.get("writer", "")
     table.cell(2, 5).text = basic.get("place", "")
     table.cell(3, 1).text = basic.get("attendees", "")
     table.cell(4, 1).text = basic.get("agenda", "") or mr.get("agenda", "")
     table.cell(5, 1).text = mr.get("meeting_content", "")
-    table.cell(6, 1).text = _join_list(mr.get("decision_items", []))
-    table.cell(7, 1).text = _join_list(mr.get("followup_plan", []))
+    support_plan = mr.get("support_plan", None)
+    if support_plan is None:
+        support_plan = mr.get("decision_items", [])
+    table.cell(6, 1).text = _join_list(support_plan)
+    table.cell(7, 1).text = ""
     doc.save(str(output_path))
-
-
-def fill_growth_docx(template_path: Path, output_path: Path, basic: Dict[str, Any], checkbox_values: Dict[str, bool], llm_result: Dict[str, Any]) -> bool:
-    from docx import Document
-    import shutil
-    shutil.copyfile(template_path, output_path)
-    doc = Document(str(output_path))
-    sg = llm_result.get("student_growth_record", {})
-    t = doc.tables[1]
-    # 기본정보 위치 기반 삽입
-    t.cell(0, 2).text = basic.get("selection_date", "")
-    t.cell(0, 11).text = basic.get("applicant", "")
-    t.cell(0, 24).text = basic.get("relation_to_student", "")
-    t.cell(2, 2).text = basic.get("student_name", "")
-    t.cell(2, 5).text = basic.get("class_name", "")
-    t.cell(2, 18).text = basic.get("birth_date", "")
-    t.cell(2, 24).text = basic.get("gender_text", "")
-    t.cell(3, 3).text = basic.get("student_phone", "")
-    t.cell(3, 18).text = basic.get("address", "")
-    t.cell(4, 3).text = basic.get("guardian_phone", "")
-    # 서술형 필드: 빈 큰 셀에 삽입
-    if len(t.rows) > 14:
-        t.cell(14, 2).text = sg.get("student_difficulties", "")
-    if len(t.rows) > 15:
-        t.cell(15, 2).text = sg.get("internal_resource_summary", "")
-    if len(t.rows) > 16:
-        t.cell(16, 2).text = sg.get("external_resource_summary", "")
-    monthly = sg.get("monthly_support_records", [])
-    for idx, rownum in enumerate([14, 15, 16, 17]):
-        if idx < len(monthly) and rownum < len(t.rows):
-            cur = t.cell(rownum, 2).text
-            add = monthly[idx].get("content", "")
-            if add:
-                t.cell(rownum, 2).text = (cur + "\n" + add).strip()
-    if len(t.rows) > 20:
-        t.cell(20, 2).text = sg.get("comprehensive_evaluation", "")
-    if len(t.rows) > 21:
-        t.cell(21, 2).text = sg.get("closure_reason", "")
-        t.cell(21, 18).text = basic.get("closure_date", "")
-    doc.save(str(output_path))
-    replace_checkbox_markers_with_unicode_fallback(output_path, checkbox_values)
-    return True
-
 
 def validate_generated_docx(path: Path) -> Tuple[bool, str]:
     if not path.exists() or path.stat().st_size <= 0:
@@ -3033,7 +2981,7 @@ def validate_generated_docx(path: Path) -> Tuple[bool, str]:
         if "{{" in text or "}}" in text:
             return False, "남은 placeholder가 있습니다."
         if re.search(r"\[[GWFISO]\d\]", text):
-            return False, "체크박스 표시자가 남아 있습니다."
+            return False, "서식 표시자가 남아 있습니다."
         banned = [w for w in HARD_BANNED_COMMON if w in text]
         if banned:
             return False, "금지 표현이 문서에 포함되었습니다: " + ", ".join(banned)
@@ -3043,16 +2991,14 @@ def validate_generated_docx(path: Path) -> Tuple[bool, str]:
 
 
 def render_document_generation_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>협의록 및 학생성장기록지 생성</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'><div class='panel-title'>회의록 생성</div>", unsafe_allow_html=True)
     if not st.session_state.get("structured_counseling_analysis") or not st.session_state.get("resource_recommendation_explanation"):
-        st.info("상담 결과 분석과 기관 추천 이유 설명이 완료되면 문서를 생성할 수 있습니다.")
+        st.info("상담 결과 분석과 지원기관 검색이 완료되면 회의록을 생성할 수 있습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
         return
-    doc_types = st.multiselect("문서 유형 선택", ["통합지원팀 회의록", "학생성장 기록지"], default=["통합지원팀 회의록", "학생성장 기록지"])
-    st.write("협의록 기본정보")
+    st.write("회의록 기본정보")
     c1, c2, c3 = st.columns(3)
     with c1:
-        meeting_round = st.text_input("회차", value="1")
         meeting_date = st.text_input("일시", value=str(date.today()))
     with c2:
         writer = st.text_input("작성자")
@@ -3060,47 +3006,26 @@ def render_document_generation_section() -> None:
     with c3:
         agenda_user = st.text_input("안건", value="대상 학생 맞춤지원 방안 협의")
     attendees = st.text_area("참석자", placeholder="예: 담임교사, 학년부장, 상담교사, 보건교사")
-
-    st.write("학생성장기록지 기본정보")
-    g1, g2, g3 = st.columns(3)
-    with g1:
-        selection_date = st.text_input("지원대상 선정일", value=str(date.today()))
-        applicant = st.text_input("신청자")
-        relation = st.text_input("학생과의 관계", value="담임교사")
-        student_name = st.text_input("학생명")
-    with g2:
-        class_name = st.text_input("학반")
-        birth_date = st.text_input("생년월일")
-        gender_text = st.selectbox("성별", ["", "남", "여"])
-        student_phone = st.text_input("학생 연락처")
-    with g3:
-        guardian_phone = st.text_input("보호자 연락처")
-        address = st.text_input("주소")
-        closure_date = st.text_input("종결일자")
-    st.write("학생성장기록지 체크박스")
-    checkbox_values = build_checkbox_values_from_ui()
     if not get_gemini_api_key():
         st.warning("Gemini API 키가 설정되어 있지 않습니다. Streamlit secrets 또는 환경변수에 GEMINI_API_KEY를 설정해 주세요.")
-    if st.button("선택 문서 생성하기", type="primary", use_container_width=True, key="btn_generate_docs"):
-        if not doc_types:
-            st.warning("생성할 문서 유형을 선택해 주세요.")
-        elif not get_gemini_api_key():
-            st.warning("API 키가 설정되지 않아 문서 서술형 초안 생성을 실행할 수 없습니다.")
+    if st.button("회의록 생성하기", type="primary", use_container_width=True, key="btn_generate_docs"):
+        if not get_gemini_api_key():
+            st.warning("API 키가 설정되지 않아 회의록 초안 생성을 실행할 수 없습니다.")
         else:
             rag = st.session_state.get("rag_search_results", {})
             rec = st.session_state.get("resource_recommendation_explanation", {})
             allowed_names = [r.get("resource_name") for r in rec.get("recommended_resources", [])]
-            payload = build_document_generation_payload(st.session_state.get("structured_counseling_analysis", {}), rec, rag, st.session_state.get("first_check_result", {}), "meeting_record_and_student_growth_record")
+            payload = build_document_generation_payload(st.session_state.get("structured_counseling_analysis", {}), rec, rag, st.session_state.get("first_check_result", {}), "meeting_record")
             payload_hash = stable_payload_hash(payload)
             if use_cached_llm_result("generated_document_json", "generated_document_json_payload_hash", payload_hash):
-                st.info("같은 입력값으로 이미 생성된 문서 초안을 재사용합니다. API를 다시 호출하지 않았습니다.")
+                st.info("같은 입력값으로 이미 생성된 회의록 초안을 재사용합니다. API를 다시 호출하지 않았습니다.")
                 result = {"success": True, "data": st.session_state["generated_document_json"], "warnings": []}
             else:
-                with st.spinner("문서 서술형 내용을 생성하고 있습니다..."):
+                with st.spinner("회의록 내용을 생성하고 있습니다..."):
                     result = call_llm_with_validation(
                         build_document_generation_system_prompt(),
                         build_document_generation_user_prompt(payload),
-                        validate_document_generation_output,
+                        validate_meeting_generation_output,
                         build_document_generation_repair_prompt,
                         validation_kwargs={"allowed_resource_names": allowed_names},
                     )
@@ -3109,60 +3034,41 @@ def render_document_generation_section() -> None:
                 out_dir = APP_DIR / "outputs"
                 out_dir.mkdir(exist_ok=True)
                 generated_files = {}
-                meeting_basic = {"meeting_round": meeting_round, "meeting_date": meeting_date, "writer": writer, "place": place, "attendees": attendees, "agenda": agenda_user}
-                student_basic = {"selection_date": selection_date, "applicant": applicant, "relation_to_student": relation, "student_name": student_name, "class_name": class_name, "birth_date": birth_date, "gender_text": gender_text, "student_phone": student_phone, "guardian_phone": guardian_phone, "address": address, "closure_date": closure_date}
-                if "통합지원팀 회의록" in doc_types:
+                meeting_basic = {"meeting_date": meeting_date, "writer": writer, "place": place, "attendees": attendees, "agenda": agenda_user}
+                tpl = TEMPLATE_DIR / "회의록.docx"
+                if not tpl.exists():
                     tpl = TEMPLATE_DIR / "협의록.docx"
-                    out = out_dir / f"통합지원팀_회의록_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-                    if not tpl.exists():
-                        st.error("templates/협의록.docx 템플릿을 찾을 수 없습니다.")
-                    else:
-                        fill_meeting_docx(tpl, out, meeting_basic, result["data"])
-                        ok, msg = validate_generated_docx(out)
-                        if ok:
-                            generated_files["meeting"] = out
-                        else:
-                            st.warning("협의록 검증 경고: " + msg)
-                            generated_files["meeting"] = out
-                if "학생성장 기록지" in doc_types:
-                    tpl = TEMPLATE_DIR / "학생성장기록지.docx"
-                    out = out_dir / f"학생성장기록지_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-                    if not tpl.exists():
-                        st.error("templates/학생성장기록지.docx 템플릿을 찾을 수 없습니다.")
-                    else:
-                        fill_growth_docx(tpl, out, student_basic, checkbox_values, result["data"])
-                        ok, msg = validate_generated_docx(out)
-                        if ok:
-                            generated_files["growth"] = out
-                        else:
-                            st.warning("학생성장기록지 검증 경고: " + msg)
-                            generated_files["growth"] = out
-                            st.info("클릭 가능한 체크박스가 아닌 표시용 체크박스로 생성되었습니다.")
-                st.session_state["generated_docx_files"] = {k: str(v) for k, v in generated_files.items()}
-                st.success("문서 생성이 완료되었습니다.")
-                if result.get("warnings"):
-                    st.warning("검증 경고: " + " / ".join(map(str, result["warnings"][:3])))
+                out = out_dir / f"통합지원팀_회의록_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                if not tpl.exists():
+                    st.error("templates/회의록.docx 템플릿을 찾을 수 없습니다.")
+                else:
+                    fill_meeting_docx(tpl, out, meeting_basic, result["data"])
+                    ok, msg = validate_generated_docx(out)
+                    if not ok:
+                        st.warning("회의록 확인 필요: " + msg)
+                    generated_files["meeting"] = out
+                    st.session_state["generated_docx_files"] = {k: str(v) for k, v in generated_files.items()}
+                    st.success("회의록 생성이 완료되었습니다.")
+                    mr = result["data"].get("meeting_record", {})
+                    st.markdown("<div class='callout'>회의 후 최종 결정사항 칸은 교사가 직접 작성하도록 비워두었습니다.</div>", unsafe_allow_html=True)
+                    with st.expander("생성 내용 미리보기", expanded=False):
+                        st.write("안건: " + str(mr.get("agenda", "")))
+                        st.write("내용: " + str(mr.get("meeting_content", "")))
+                        st.write("지원계획")
+                        for item in mr.get("support_plan", mr.get("decision_items", [])):
+                            st.write("- " + str(item))
             else:
-                st.error("문서 생성에 실패했습니다: " + str(result.get("error")))
-    data = st.session_state.get("generated_document_json")
+                st.error("회의록 생성에 실패했습니다: " + str(result.get("error")))
     files = st.session_state.get("generated_docx_files", {})
-    if data:
-        with st.expander("생성된 문서 서술형 JSON"):
-            st.json(data)
-        if files.get("meeting") and Path(files["meeting"]).exists():
-            st.download_button("협의록 DOCX 다운로드", Path(files["meeting"]).read_bytes(), Path(files["meeting"]).name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
-        if files.get("growth") and Path(files["growth"]).exists():
-            st.download_button("학생성장기록지 DOCX 다운로드", Path(files["growth"]).read_bytes(), Path(files["growth"]).name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+    if files.get("meeting") and Path(files["meeting"]).exists():
+        st.download_button("회의록 DOCX 다운로드", Path(files["meeting"]).read_bytes(), Path(files["meeting"]).name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 def render_followup_workflow_sections() -> None:
     render_counseling_question_section()
     render_counseling_analysis_section()
     render_rag_search_section()
-    render_resource_recommendation_section()
     render_document_generation_section()
-
 
 def chart_bar(data: pd.DataFrame, x: str, y: str, title: str = "") -> None:
     if px is None:
@@ -3194,7 +3100,7 @@ def page_dashboard() -> None:
         ("심층 파악 필요/권고", f"{deep}명", "2차 상담 질문 후보"),
         ("주의 및 탐색", f"{watch}명", "담임 면담 후보"),
         ("우선 확인 신호", f"{red}명", "긴급 확인 관련"),
-        ("회의자료 후보", f"{meeting}건", "학맞통 회의 검토"),
+        ("회의자료 후보", f"{meeting}건", "학생맞춤통합지원 회의 검토"),
     ]
     for col, (label, value, help_text) in zip(metric_cols, metrics):
         with col:
@@ -3226,13 +3132,6 @@ def page_dashboard() -> None:
         chart_bar(stage_counts, "단계", "학생수")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<div class='panel'><div class='panel-title'>학교 DB 연결 상태</div>", unsafe_allow_html=True)
-        paths = st.session_state.school_db.get("paths", {})
-        rows = []
-        for label, path in paths.items():
-            rows.append({"DB": label, "연결 파일": path.name if path else "없음"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # 페이지: 1차 체크리스트
@@ -3244,9 +3143,9 @@ def render_checklist_input(items_df: pd.DataFrame, selected_student: str) -> Dic
         return responses
 
     score_labels = {
-        0: "0점 · 관찰되지 않음",
-        1: "1점 · 약하게/가끔 관찰됨",
-        2: "2점 · 뚜렷하게/자주 관찰됨",
+        0: "관찰되지 않음",
+        1: "약하게/가끔 관찰됨",
+        2: "뚜렷하게/자주 관찰됨",
     }
     grouped = items_df.groupby(["domain_order", "domain_label"], dropna=False, sort=True)
     for (_, domain_label), sub in grouped:
@@ -3271,8 +3170,8 @@ def render_checklist_input(items_df: pd.DataFrame, selected_student: str) -> Dic
 
 def page_first_checklist() -> None:
     render_page_title(
-        "1차 체크리스트 입력 및 후속 지원 흐름",
-        "1차 체크리스트 결과를 바탕으로 2차 상담 질문, 상담 메모 구조화, RAG 검색, 기관 추천 이유, 문서 생성까지 연결합니다.",
+        "1차 체크리스트 입력",
+        "교사가 관찰한 신호를 입력하면 학생맞춤통합지원 검토 단계와 다음 조치를 안내합니다.",
     )
 
     items_df = get_active_items_df()
@@ -3288,94 +3187,52 @@ def page_first_checklist() -> None:
     selected_label = st.selectbox("학생 선택", student_options, index=0)
     selected_student = selected_label.split(" | ")[0]
 
-    left, right = st.columns([1.1, 1])
-    with left:
-        st.markdown("<div class='panel'><div class='panel-title'>1차 체크리스트</div>", unsafe_allow_html=True)
-        responses = render_checklist_input(items_df, selected_student)
-        save_clicked = st.button("체크리스트 결과 계산 및 학생 기록 반영", type="primary", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'><div class='panel-title'>1차 체크리스트</div>", unsafe_allow_html=True)
+    responses = render_checklist_input(items_df, selected_student)
+    calc_clicked = st.button("체크리스트 결과 계산", type="primary", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if not responses:
         return
 
-    first_result = calculate_checklist_scores(items_df, responses)
-    red_flag_result = detect_red_flags(items_df, responses)
-    active_deep_rules = activate_deep_rules(responses, rule_map_df, deep_rules_df)
-    counseling_areas = derive_counseling_consideration_areas(
-        first_result["domain_scores"], responses, red_flag_result, active_deep_rules, items_df
-    )
-    context_result = calculate_context_result(
-        first_result["primary_areas"],
-        first_result["student_raw_score"],
-        first_result["student_scaled_score"],
-        red_flag_result,
-        st.session_state.get("selected_school_context"),
-        st.session_state.get("selected_region_context"),
-    )
-    stage_result = {
-        "score_based_stage": context_result["score_based_stage"],
-        "score_based_action": context_result["score_based_action"],
-        "final_action_stage": context_result["final_action_stage"],
-        "final_action": context_result["final_action"],
-        "final_action_reason": context_result["final_action_reason"],
-        "activate_counseling_form": context_result["activate_counseling_form"],
-    }
-    payload = build_counseling_payload(
-        first_result, red_flag_result, context_result, active_deep_rules, counseling_areas, stage_result
-    )
-
-    # 이후 기능에서 재사용할 세션 저장. 검증된 LLM 결과는 각 기능별 버튼 클릭 시 별도로 저장됩니다.
-    st.session_state["first_check_result"] = payload["first_check_result"]
-    st.session_state["red_flag_result"] = payload["red_flag_result"]
-    st.session_state["context_result"] = payload["context_result"]
-    st.session_state["active_deep_rules"] = payload["active_deep_rules"]
-    st.session_state["counseling_consideration_areas"] = counseling_areas
-    st.session_state["last_payload"] = payload
-
-    with right:
-        st.markdown("<div class='panel'><div class='panel-title'>즉시 계산 결과</div>", unsafe_allow_html=True)
-        summary_for_cards = {
-            "raw_score": first_result["student_raw_score"],
-            "scaled_score": first_result["student_scaled_score"],
+    if calc_clicked:
+        first_result = calculate_checklist_scores(items_df, responses)
+        red_flag_result = detect_red_flags(items_df, responses)
+        active_deep_rules = activate_deep_rules(responses, rule_map_df, deep_rules_df)
+        counseling_areas = derive_counseling_consideration_areas(
+            first_result["domain_scores"], responses, red_flag_result, active_deep_rules, items_df
+        )
+        context_result = calculate_context_result(
+            first_result["primary_areas"],
+            first_result["student_raw_score"],
+            first_result["student_scaled_score"],
+            red_flag_result,
+            st.session_state.get("selected_school_context"),
+            st.session_state.get("selected_region_context"),
+        )
+        stage_result = {
             "score_based_stage": context_result["score_based_stage"],
-            "urgent_flag": red_flag_result.get("urgent_flag", False),
-            "context_adjustment_applied": context_result["context_adjustment_applied"],
-            "context_adjustment_reason": context_result["context_adjustment_reason"],
-            "context_check_score": context_result["context_check_score"],
+            "score_based_action": context_result["score_based_action"],
             "final_action_stage": context_result["final_action_stage"],
-            "final_action_reason": context_result["final_action_reason"],
             "final_action": context_result["final_action"],
+            "final_action_reason": context_result["final_action_reason"],
+            "activate_counseling_form": context_result["activate_counseling_form"],
         }
-        render_summary_cards(summary_for_cards)
-        final_stage = context_result["final_action_stage"]
-        if final_stage == "일상적 관찰":
-            st.info("현재 1차 체크리스트 기준으로는 뚜렷한 지원 신호가 높지 않습니다. 평소 관찰과 라포 형성을 유지합니다.")
-        elif final_stage == "주의 및 탐색":
-            st.warning("일부 지원 신호가 관찰됩니다. 담임교사의 가벼운 면담을 통해 학생의 최근 변화와 어려움을 탐색할 수 있습니다.")
-        elif final_stage == "심층 파악 권고":
-            st.warning("체크리스트 기준으로는 주의 및 탐색 단계이나, 학교·지역 지원여건을 고려할 때 2차 상담 질문을 통해 한 번 더 확인하는 것이 권장됩니다.")
-        else:
-            st.error("여러 지원 신호 또는 우선 확인 필요 신호가 확인되어 심층 파악이 필요합니다. 다음 단계에서 AI 2차 상담 질문 생성으로 연결할 수 있습니다.")
-        st.markdown("</div>", unsafe_allow_html=True)
+        payload = build_counseling_payload(
+            first_result, red_flag_result, context_result, active_deep_rules, counseling_areas, stage_result
+        )
 
-    st.markdown("<div class='panel'><div class='panel-title'>영역별 점수 표</div>", unsafe_allow_html=True)
-    render_domain_score_table(first_result["domain_scores"], first_result["primary_areas"])
-    st.markdown("</div>", unsafe_allow_html=True)
+        # 이후 단계에서 사용할 결과 저장
+        st.session_state["first_check_result"] = payload["first_check_result"]
+        st.session_state["red_flag_result"] = payload["red_flag_result"]
+        st.session_state["context_result"] = payload["context_result"]
+        st.session_state["active_deep_rules"] = payload["active_deep_rules"]
+        st.session_state["counseling_consideration_areas"] = counseling_areas
+        st.session_state["last_payload"] = payload
+        st.session_state["last_checklist_student"] = selected_student
+        st.session_state.checklist_responses[selected_student] = responses
 
-    render_red_flag_section(red_flag_result)
-    render_deep_rule_cards(active_deep_rules)
-    render_counseling_area_table(counseling_areas)
-    render_context_table(context_result)
-
-    st.markdown("<div class='panel'><div class='panel-title'>다음 단계 LLM 입력 payload 미리보기</div>", unsafe_allow_html=True)
-    st.json(payload)
-    st.markdown(
-        "<div class='callout'>다음 단계에서는 위 상담 고려 영역과 심층 유도 분석을 교육청 체크리스트와 함께 LLM에 전달하여 2차 상담 질문을 생성합니다.</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    if save_clicked:
+        # 학생 목록에도 계산 결과를 반영하되, 사용자에게는 내부 처리로 노출하지 않는다.
         all_df = st.session_state.students.copy()
         idx = all_df.index[all_df["학생코드"] == selected_student]
         if len(idx) > 0:
@@ -3394,8 +3251,69 @@ def page_first_checklist() -> None:
             all_df.at[idx0, "주요신호"] = ", ".join(checked_codes) if checked_codes else "선택된 신호 없음"
             all_df.at[idx0, "기한"] = str(date.today()) if context_result["final_action_stage"] != "일상적 관찰" else "-"
             st.session_state.students = all_df
-        st.session_state.checklist_responses[selected_student] = responses
-        st.success("계산 결과가 학생 기록에 반영되었습니다.")
+
+        # 새 체크리스트 계산 이후 이전 단계 결과가 섞이지 않도록 후속 생성 결과를 초기화한다.
+        for key in [
+            "generated_counseling_questions",
+            "structured_counseling_analysis",
+            "rag_search_results",
+            "resource_recommendation_explanation",
+            "generated_document_json",
+            "generated_docx_files",
+        ]:
+            st.session_state.pop(key, None)
+        for key in [
+            "generated_counseling_questions_payload_hash",
+            "structured_counseling_analysis_payload_hash",
+            "resource_recommendation_explanation_payload_hash",
+            "generated_document_json_payload_hash",
+        ]:
+            st.session_state.pop(key, None)
+
+    if not st.session_state.get("first_check_result") or st.session_state.get("last_checklist_student") != selected_student:
+        st.info("체크리스트 입력 후 ‘체크리스트 결과 계산’을 누르면 결과가 표시됩니다.")
+        return
+
+    first_check_result = st.session_state.get("first_check_result", {})
+    context_result = st.session_state.get("context_result", {})
+    red_flag_result = st.session_state.get("red_flag_result", {})
+    counseling_areas = st.session_state.get("counseling_consideration_areas", [])
+
+    support_areas = [x.get("area") for x in counseling_areas if x.get("area")]
+    support_areas = [x for x in support_areas if x != "긴급확인"]
+    if not support_areas:
+        support_areas = first_check_result.get("primary_areas", []) or []
+    if not support_areas:
+        support_areas_text = "현재 뚜렷한 우선 영역 없음"
+    else:
+        support_areas_text = ", ".join(dict.fromkeys(support_areas))
+
+    final_stage = first_check_result.get("final_action_stage") or context_result.get("final_action_stage", "-")
+    final_reason = first_check_result.get("final_action_reason") or context_result.get("final_action_reason", "")
+    action = "2차 상담 질문 생성" if first_check_result.get("activate_counseling_form") else "담임교사 면담 및 추가 관찰"
+
+    st.markdown("<div class='panel'><div class='panel-title'>체크리스트 결과</div>", unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(metric_card("안내 단계", str(final_stage), "교사 검토용 안내"), unsafe_allow_html=True)
+    with c2:
+        st.markdown(metric_card("복합 지원 영역", support_areas_text, "상담에서 함께 볼 영역"), unsafe_allow_html=True)
+    with c3:
+        st.markdown(metric_card("우선 확인 신호", "있음" if red_flag_result.get("urgent_flag") else "없음", "필요 시 먼저 확인"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(metric_card("권장 조치", action, "다음 단계"), unsafe_allow_html=True)
+
+    if final_reason:
+        st.info(final_reason)
+    if final_stage == "일상적 관찰":
+        st.caption("현재는 평소 관찰과 라포 형성을 유지하는 단계입니다.")
+    elif final_stage == "주의 및 탐색":
+        st.caption("담임교사의 가벼운 면담으로 최근 변화와 어려움을 탐색할 수 있습니다.")
+    elif final_stage == "심층 파악 권고":
+        st.caption("2차 상담 질문을 통해 한 번 더 확인하는 것이 권장됩니다.")
+    else:
+        st.caption("다음 단계에서 2차 상담 질문을 생성하여 학생의 어려움을 조금 더 구체적으로 확인할 수 있습니다.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     render_followup_workflow_sections()
 
@@ -3442,10 +3360,6 @@ def page_student_detail() -> None:
             st.info("현재는 일상적 관찰 단계입니다.")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        if st.session_state.get("last_payload"):
-            with st.expander("최근 생성 payload 보기"):
-                st.json(st.session_state.last_payload)
-
 
 def make_status_table(df: pd.DataFrame) -> pd.DataFrame:
     table = df.copy()
@@ -3472,46 +3386,12 @@ def page_status_table() -> None:
 
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        st.download_button("CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"), file_name="학맞통_지원현황표.csv", mime="text/csv", use_container_width=True)
+        st.download_button("CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"), file_name="학생맞춤통합지원_지원현황표.csv", mime="text/csv", use_container_width=True)
     with col2:
-        st.download_button("Excel 다운로드", data=to_excel_bytes(table), file_name="학맞통_지원현황표.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button("Excel 다운로드", data=to_excel_bytes(table), file_name="학생맞춤통합지원_지원현황표.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     with col3:
         st.info("실제 제출·시연에서는 학생 실명 대신 학생코드만 사용하세요.")
 
-
-def page_data_connection() -> None:
-    render_page_title("DB 연결 안내", "현재 버전은 CSV 파일을 DB처럼 읽어 학교 정보와 맥락 점수를 연결합니다.")
-    st.markdown("<div class='panel'><div class='panel-title'>현재 연결된 파일</div>", unsafe_allow_html=True)
-    rows = []
-    for key, path in st.session_state.school_db.get("paths", {}).items():
-        rows.append({"구분": key, "파일명": path.name if path else "없음", "경로": str(path) if path else "-"})
-    rows.extend(
-        [
-            {"구분": "checklist", "파일명": st.session_state.get("checklist_path_name", "없음"), "경로": "data/first_checklist_items_v1.csv"},
-            {"구분": "deep_rules", "파일명": st.session_state.get("deep_rules_path_name", "없음"), "경로": "data/deep_inference_rules_v1.csv"},
-            {"구분": "rule_map", "파일명": st.session_state.get("rule_map_path_name", "없음"), "경로": "data/checklist_item_deep_rule_map_v1.csv"},
-        ]
-    )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='panel'><div class='panel-title'>GitHub 배포용 폴더 구조</div>", unsafe_allow_html=True)
-    st.code(
-        """hmt-streamlit/
-├─ hakmatch_streamlit_app.py
-├─ requirements.txt
-└─ data/
-   ├─ 05_school_info_db_location.csv
-   ├─ 02_school_context_scores_db.csv
-   ├─ 서울_학생지원맥락_영역별점수.csv
-   ├─ first_checklist_items_v1.csv
-   ├─ deep_inference_rules_v1.csv
-   └─ checklist_item_deep_rule_map_v1.csv""",
-        language="text",
-    )
-    st.write("Streamlit Cloud에서는 별도 SQL 서버 없이도 위 CSV 파일을 data 폴더에 올리면 앱이 자동으로 읽습니다.")
-    st.write("나중에 Supabase, PostgreSQL 같은 실제 DB로 바꿀 때는 load_school_databases() 함수만 DB 조회 코드로 교체하면 됩니다.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # 초기화 / 사이드바
@@ -3572,7 +3452,7 @@ def init_state() -> None:
 
 
 def render_sidebar() -> str:
-    st.sidebar.markdown("### 학교 DB 선택")
+    st.sidebar.markdown("### 학교 선택")
     school_info_df = st.session_state.school_db["school_info_df"]
     school_names = school_info_df["학교명"].astype(str).drop_duplicates().tolist()
     if st.session_state.selected_school_name not in school_names:
@@ -3581,7 +3461,7 @@ def render_sidebar() -> str:
         "학교명",
         school_names,
         index=school_names.index(st.session_state.selected_school_name),
-        help="CSV DB에서 학교 정보를 불러옵니다.",
+        help="선택한 학교의 기본 정보를 불러옵니다.",
     )
     if selected_school != st.session_state.selected_school_name:
         st.session_state.selected_school_name = selected_school
@@ -3613,14 +3493,6 @@ def render_sidebar() -> str:
     st.sidebar.write(f"전문상담교사: {school.get('전문상담교사_수')}명")
     st.sidebar.write(f"보건교사: {school.get('보건교사_수')}명")
     st.sidebar.write(f"진로상담실: {'있음' if school.get('진로상담실_있음') else '없음'}")
-    st.sidebar.caption("학교 정보는 DB CSV에서 불러와 왼쪽 정보란에 표시합니다.")
-    st.sidebar.divider()
-    st.sidebar.markdown("### Gemini 호출 기록")
-    st.sidebar.write(f"이번 앱 세션 호출: {st.session_state.get('gemini_call_count_session', 0)}회")
-    if st.session_state.get('gemini_call_log_session'):
-        last_calls = st.session_state.get('gemini_call_log_session', [])[-5:]
-        st.sidebar.caption("최근 호출: " + " / ".join([f"{x.get('time')} {x.get('model')}" for x in last_calls]))
-    st.sidebar.caption("같은 입력값은 기존 결과를 재사용해 API 호출을 줄입니다.")
     return page
 
 # -----------------------------------------------------------------------------
@@ -3645,7 +3517,7 @@ def main() -> None:
     st.markdown(
         """
         <div class="footer-note">
-        본 화면은 학맞통 AI 서비스의 발표·시연용 프로토타입입니다. 학생 지원 여부를 자동 확정하지 않으며,
+        본 화면은 학생맞춤통합지원 서비스의 시연용 화면입니다. 학생 지원 여부를 자동 확정하지 않으며,
         담임교사와 학교 협의체의 검토를 돕는 참고자료로 설계되었습니다.
         </div>
         """,
