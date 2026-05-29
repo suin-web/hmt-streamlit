@@ -457,6 +457,75 @@ def inject_css() -> None:
             color: #7f1d1d;
             margin-bottom: 10px;
         }
+
+        .workflow-section-header {
+            background: #ffffff;
+            border: 1px solid #dbe2ef;
+            border-radius: 14px;
+            padding: 18px 20px;
+            margin: 22px 0 14px 0;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+        }
+        .workflow-section-kicker {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            height: 26px;
+            border-radius: 999px;
+            background: #eef4ff;
+            border: 1px solid #bfdbfe;
+            color: #1d4ed8;
+            font-weight: 900;
+            font-size: .82rem;
+            margin-right: 8px;
+        }
+        .workflow-section-title {
+            font-size: 1.08rem;
+            font-weight: 900;
+            color: #0f172a;
+            margin-bottom: 4px;
+        }
+        .workflow-section-subtitle {
+            color: #64748b;
+            font-size: .9rem;
+            line-height: 1.5;
+        }
+        .area-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-top: 10px;
+        }
+        .area-chip-main {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 7px 12px;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e40af;
+            font-size: .95rem;
+            font-weight: 900;
+        }
+        .area-chip-sub {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 5px 10px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            color: #64748b;
+            font-size: .8rem;
+            font-weight: 750;
+        }
+        .analysis-readable-text {
+            font-size: 1.03rem;
+            line-height: 1.85;
+            color: #1f2937;
+            word-break: keep-all;
+            margin-top: 6px;
+        }
         .footer-note {
             color: #64748b;
             font-size: 0.82rem;
@@ -1317,6 +1386,55 @@ def render_page_title(title: str, subtitle: str) -> None:
     st.markdown(f"<div class='page-subtitle'>{subtitle}</div>", unsafe_allow_html=True)
 
 
+def render_workflow_section_header(number: str, title: str, subtitle: str = "") -> None:
+    st.markdown(
+        f"""
+        <div class="workflow-section-header">
+            <div class="workflow-section-title"><span class="workflow-section-kicker">{html.escape(str(number))}</span>{html.escape(str(title))}</div>
+            <div class="workflow-section-subtitle">{html.escape(str(subtitle))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def area_chips_html(areas: List[str], css_class: str = "area-chip-main") -> str:
+    clean = [normalize_text(a) for a in areas if normalize_text(a) and normalize_text(a) != "긴급확인"]
+    if not clean:
+        clean = ["현재 뚜렷한 우선 영역 없음"]
+    chips = "".join(f"<span class='{css_class}'>{html.escape(a)}</span>" for a in dict.fromkeys(clean))
+    return f"<div class='area-chip-row'>{chips}</div>"
+
+
+def get_checklist_direct_and_related_areas(first_check_result: Dict[str, Any], counseling_areas: List[Dict[str, Any]], active_deep_rules: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[str], List[str]]:
+    """체크리스트에서 직접 점수가 나온 영역과 심층분석으로 함께 고려할 영역을 분리한다."""
+    direct: List[str] = []
+    domain_scores = first_check_result.get("domain_scores", {})
+    if isinstance(domain_scores, dict):
+        for area, score in domain_scores.items():
+            try:
+                val = float(score.get("domain_scaled_score", score) if isinstance(score, dict) else score)
+            except Exception:
+                val = 0.0
+            if area in SUPPORT_AREAS and val > 0:
+                direct.append(area)
+    if not direct:
+        for area in first_check_result.get("primary_areas", []) or []:
+            if area in SUPPORT_AREAS and area not in direct:
+                direct.append(area)
+
+    related: List[str] = []
+    for item in counseling_areas or []:
+        area = normalize_area_name(item.get("area"))
+        if area in SUPPORT_AREAS and area not in direct and area not in related:
+            related.append(area)
+    for rule in active_deep_rules or []:
+        for area in normalize_target_areas(rule.get("linked_areas", [])) + normalize_target_areas(rule.get("counseling_question_areas", [])):
+            if area in SUPPORT_AREAS and area not in direct and area not in related:
+                related.append(area)
+    return list(dict.fromkeys(direct)), list(dict.fromkeys(related))
+
+
 def metric_card(label: str, value: str, help_text: str = "") -> str:
     return f"""
     <div class="metric-card">
@@ -1871,6 +1989,8 @@ def build_counseling_analysis_system_prompt() -> str:
 너는 학생맞춤통합지원 업무를 돕는 교사용 AI 상담 결과 분석 보조도구이다.
 교사가 입력한 2차 상담 결과 메모를 읽고 맞춤 검색과 회의록 초안 생성에 사용할 수 있도록 핵심 정보를 구조화한다.
 학생을 진단하거나 판정하지 말고, 상담 메모와 제공된 자료에 근거한 정보만 정리한다.
+가장 중요한 기준은 교사의 2차 상담 결과 메모이다. 1차 체크리스트와 심층 유도 분석은 참고자료일 뿐이며, 상담 메모에서 직접 확인되지 않은 지원 영역을 primary_area나 key_signals에 넣지 않는다.
+상담 메모에서 어떤 영역의 어려움이 없거나 낮다고 명시된 경우, 그 영역은 지원 영역으로 분류하지 않는다.
 이 단계에서는 urgent_flag, Red Flag, 긴급확인 분기를 사용하지 않는다.
 출력은 반드시 지정된 JSON 형식으로만 작성한다.
 """.strip()
@@ -1900,8 +2020,14 @@ def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
 [기존 지원 여부]
 {payload.get('existing_support_info')}
 
-[복합 검토 지원 영역]
-{_safe_json(payload.get('target_areas'))}
+[1차 체크리스트에서 참고할 수 있는 영역]
+{_safe_json(payload.get('counseling_consideration_areas'))}
+
+주의:
+- 위 영역들은 참고자료일 뿐이다.
+- 상담 메모에서 직접 확인된 내용만 primary_area, key_signals, rag_search_queries에 반영하라.
+- 상담 메모에 “문제 없음”, “어려움 없음”, “성적이 좋음”, “경제적 부담 없음”처럼 부정 또는 양호함이 적힌 영역은 제외하라.
+- 예를 들어 학업에는 어려움이 없고 진로 무관심과 친구관계 어려움이 확인되면, primary_area와 linked_areas는 진로·심리정서 중심으로 작성하라.
 
 출력 형식:
 {{
@@ -1991,7 +2117,8 @@ def render_counseling_analysis_section() -> None:
                         validation_kwargs={"teacher_counseling_note": note},
                     )
             if result["success"]:
-                save_llm_result("structured_counseling_analysis", "structured_counseling_analysis_payload_hash", payload_hash, result["data"])
+                processed_data = postprocess_counseling_analysis_result(result["data"], note)
+                save_llm_result("structured_counseling_analysis", "structured_counseling_analysis_payload_hash", payload_hash, processed_data)
                 st.session_state["teacher_counseling_note"] = note
                 st.session_state["teacher_support_judgment"] = judgment
                 st.session_state["existing_support_info"] = existing
@@ -1999,15 +2126,22 @@ def render_counseling_analysis_section() -> None:
             else:
                 st.warning(user_friendly_generation_error(result.get("error"), "상담 결과 분석"))
     data = st.session_state.get("structured_counseling_analysis")
+    if data and st.session_state.get("teacher_counseling_note"):
+        data = postprocess_counseling_analysis_result(data, st.session_state.get("teacher_counseling_note", ""))
+        st.session_state["structured_counseling_analysis"] = data
     if data:
         summ = data.get("analysis_summary", {})
         one_line = summ.get("support_needed_reason") or summ.get("one_sentence_summary") or "상담 결과를 바탕으로 추가 검토가 필요합니다."
         target_areas = derive_integrated_support_areas(data)
+        secondary = [a for a in data.get("secondary_consideration_areas", []) if a not in target_areas]
         c1, c2 = st.columns([1.35, 1])
         with c1:
             st.markdown(analysis_summary_card(summ.get("support_needed", "-"), one_line), unsafe_allow_html=True)
         with c2:
-            st.markdown(metric_card("복합 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), "함께 검토할 영역"), unsafe_allow_html=True)
+            st.markdown(metric_card("상담에서 확인된 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), "상담 메모 기준"), unsafe_allow_html=True)
+            if secondary:
+                st.markdown("<div class='small-muted' style='margin-top:8px;'>체크리스트상 함께 고려할 수 있는 영역</div>", unsafe_allow_html=True)
+                st.markdown(area_chips_html(secondary, "area-chip-sub"), unsafe_allow_html=True)
         st.caption("AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 돕는 참고자료입니다.")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2215,13 +2349,106 @@ def normalize_target_areas(areas: Any) -> List[str]:
     return out
 
 
-def derive_integrated_support_areas(analysis: Dict[str, Any]) -> List[str]:
-    """상담 결과, 1차 체크리스트 고려 영역, 심층 유도 분석을 종합해 추천 과정에서 함께 볼 영역을 만든다.
+def _note_has_pattern(note: str, patterns: List[str]) -> bool:
+    compact = re.sub(r"\s+", "", normalize_text(note))
+    raw = normalize_text(note)
+    return any(re.search(p, raw) or re.search(p, compact) for p in patterns)
 
-    기존 구현은 analysis['primary_area'] 하나만 기관 추천 기준으로 사용했다.
-    이 함수는 학생맞춤통합지원의 복합지원 취지에 맞게 primary_area 외에도
-    key_signals.linked_areas, 상담 고려 영역, 심층 유도 분석의 linked_areas/counseling_question_areas,
-    생성된 상담 질문의 areas_to_confirm를 함께 사용한다.
+
+def infer_support_areas_from_counseling_note(note: str) -> List[str]:
+    """상담 메모에서 실제로 확인되는 지원 영역만 추출한다.
+
+    1차 체크리스트나 심층분석 영역을 그대로 가져오지 않고, 교사가 입력한 상담 메모에 직접 드러난 신호를 우선한다.
+    """
+    text = normalize_text(note)
+    compact = re.sub(r"\s+", "", text)
+    keyword_map = {
+        "진로": ["진로", "꿈", "장래", "미래", "목표", "하고싶은", "무엇을하고", "부모님이시키", "시키는대로", "관심이없", "무관심", "직업", "전공"],
+        "심리정서": ["무기력", "소극", "친구", "어울", "관계", "외롭", "혼자", "의지", "자존감", "마음", "불편", "부담", "위축", "기분", "정서", "감정"],
+        "학업": ["학업", "공부", "성적", "과제", "수업", "숙제", "시험", "집중", "결석", "지각", "학습"],
+        "복지경제": ["경제", "금전", "생계", "급식", "결식", "교육비", "기초수급", "차상위", "한부모", "조손", "돌봄", "의복", "위생", "체취", "준비물", "가정형편", "생활비"],
+    }
+    negative_patterns = {
+        "학업": [r"학업.*(문제|어려움).*없", r"공부.*(문제|어려움).*없", r"수업.*(문제|어려움).*없", r"과제.*(문제|어려움).*없", r"성적.*(좋|우수|양호)", r"성적이좋"],
+        "복지경제": [r"경제.*(문제|어려움|부담).*없", r"가정.*경제.*(문제|어려움).*없", r"복지.*필요.*없", r"생활.*(문제|어려움).*없", r"돌봄.*(문제|어려움).*없"],
+        "심리정서": [r"친구.*(문제|어려움).*없", r"정서.*(문제|어려움).*없", r"마음.*(문제|어려움).*없", r"관계.*(문제|어려움).*없"],
+        "진로": [r"진로.*(문제|어려움).*없", r"목표.*(문제|어려움).*없"],
+    }
+    out: List[str] = []
+    for area, keywords in keyword_map.items():
+        if any(k in compact for k in keywords):
+            out.append(area)
+    for area, patterns in negative_patterns.items():
+        if area in out and _note_has_pattern(text, patterns):
+            out.remove(area)
+    return list(dict.fromkeys(out))
+
+
+def postprocess_counseling_analysis_result(data: Dict[str, Any], teacher_note: str) -> Dict[str, Any]:
+    """LLM이 1차 체크리스트 영역을 과도하게 끌고 오는 것을 막고, 상담 메모 근거 영역을 우선한다."""
+    if not isinstance(data, dict):
+        return data
+    data = dict(data)
+    note_areas = infer_support_areas_from_counseling_note(teacher_note)
+    llm_areas: List[str] = []
+    primary = normalize_area_name(data.get("primary_area"))
+    if primary in SUPPORT_AREAS:
+        llm_areas.append(primary)
+    for sig in data.get("key_signals", []) or []:
+        for area in normalize_target_areas(sig.get("linked_areas", [])):
+            if area not in llm_areas:
+                llm_areas.append(area)
+
+    # 상담 메모에서 직접 잡힌 영역이 있으면 그 영역을 우선한다.
+    confirmed = note_areas or llm_areas
+    if note_areas:
+        for sig in data.get("key_signals", []) or []:
+            linked = [a for a in normalize_target_areas(sig.get("linked_areas", [])) if a in confirmed]
+            if not linked:
+                # evidence에 직접 키워드가 있는 경우 보정
+                inferred = infer_support_areas_from_counseling_note(str(sig.get("evidence_text", "")) + " " + str(sig.get("signal", "")))
+                linked = [a for a in inferred if a in confirmed]
+            sig["linked_areas"] = linked or confirmed[:1]
+        if data.get("primary_area") not in confirmed:
+            data["primary_area"] = confirmed[0] if confirmed else "공통"
+
+    # 검색어도 확인된 영역 중심으로 보정한다.
+    if confirmed:
+        rq = data.get("rag_search_queries", []) or []
+        filtered = []
+        for q in rq:
+            qtext = str(q.get("query", ""))
+            if any(a in qtext for a in confirmed) or not any(a in qtext for a in SUPPORT_AREAS):
+                filtered.append(q)
+        for area in confirmed:
+            filtered.append({"query": f"{area} 학생맞춤통합지원 지원 절차", "target_collection": "policy_chunks", "purpose": f"{area} 지원 근거 확인"})
+            filtered.append({"query": f"{area} 학생 지원기관 상담 지원", "target_collection": "resource_catalog", "purpose": f"{area} 지원기관 후보 확인"})
+        # 중복 제거
+        seen = set()
+        unique = []
+        for q in filtered:
+            key = (q.get("target_collection"), q.get("query"))
+            if key not in seen:
+                seen.add(key)
+                unique.append(q)
+        data["rag_search_queries"] = unique[:8]
+
+    data["confirmed_support_areas"] = confirmed
+    # 체크리스트 기반으로 함께 볼 수 있지만 상담 메모에서는 직접 확인되지 않은 영역
+    previous = []
+    for item in st.session_state.get("counseling_consideration_areas", []) or []:
+        area = normalize_area_name(item.get("area"))
+        if area in SUPPORT_AREAS and area not in confirmed and area not in previous:
+            previous.append(area)
+    data["secondary_consideration_areas"] = previous
+    return data
+
+
+def derive_integrated_support_areas(analysis: Dict[str, Any]) -> List[str]:
+    """상담 메모에서 직접 확인된 지원 영역을 우선해 추천 단계의 기준 영역을 정한다.
+
+    이전 버전은 1차 체크리스트와 심층분석 영역까지 모두 합쳐 네 영역이 과도하게 표시될 수 있었다.
+    현재 버전은 confirmed_support_areas가 있으면 그것을 우선 사용하고, 없을 때만 상담 분석 결과의 primary/key_signals를 사용한다.
     """
     target: List[str] = []
 
@@ -2230,36 +2457,22 @@ def derive_integrated_support_areas(analysis: Dict[str, Any]) -> List[str]:
             if area not in target:
                 target.append(area)
 
-    add_many(analysis.get("primary_area"))
+    add_many(analysis.get("confirmed_support_areas"))
+    if target:
+        return target
 
+    add_many(analysis.get("primary_area"))
     for sig in analysis.get("key_signals", []) or []:
         add_many(sig.get("linked_areas", []))
-
     for q in analysis.get("rag_search_queries", []) or []:
-        # 질의 텍스트 안에 영역명이 직접 들어온 경우도 보조적으로 반영
         qtext = str(q.get("query", ""))
         for area in SUPPORT_AREAS:
             if area in qtext and area not in target:
                 target.append(area)
-
-    for area_obj in st.session_state.get("counseling_consideration_areas", []) or []:
-        add_many(area_obj.get("area"))
-
-    for rule in st.session_state.get("active_deep_rules", []) or []:
-        add_many(rule.get("linked_areas", []))
-        add_many(rule.get("counseling_question_areas", []))
-
-    generated_questions = st.session_state.get("generated_counseling_questions", {}) or {}
-    basis = generated_questions.get("question_generation_basis", {}) or {}
-    add_many(basis.get("primary_areas", []))
-    add_many(basis.get("secondary_areas", []))
-    for area_obj in generated_questions.get("areas_to_confirm", []) or []:
-        add_many(area_obj.get("area"))
-    for q in generated_questions.get("recommended_questions", []) or []:
-        add_many(q.get("linked_area"))
-
     if not target:
-        add_many("공통")
+        # 마지막 보조: 상담 분석 결과가 충분하지 않을 때만 체크리스트 영역을 참고한다.
+        for area_obj in st.session_state.get("counseling_consideration_areas", []) or []:
+            add_many(area_obj.get("area"))
     return target or ["공통"]
 
 
@@ -2733,7 +2946,7 @@ def render_rag_search_section() -> None:
     target_areas_preview = derive_integrated_support_areas(analysis)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(metric_card("복합 지원 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), "함께 고려"), unsafe_allow_html=True)
+        st.markdown(metric_card("상담에서 확인된 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), "상담 메모 기준"), unsafe_allow_html=True)
     with c2:
         st.markdown(metric_card("학교 자치구", school.get("자치구", "-"), "지역 기준"), unsafe_allow_html=True)
     with c3:
@@ -3169,9 +3382,13 @@ def render_document_generation_section() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_followup_workflow_sections() -> None:
+    render_workflow_section_header("2", "2차 상담 질문 만들기", "체크리스트 결과를 바탕으로 학생과 대화할 때 활용할 질문을 제안합니다.")
     render_counseling_question_section()
+    render_workflow_section_header("3", "2차 상담 결과 정리", "상담 메모에서 확인된 신호를 간단히 정리하고, 실제로 함께 볼 지원 영역을 좁힙니다.")
     render_counseling_analysis_section()
+    render_workflow_section_header("4", "지원기관 추천", "상담 결과와 학교 위치를 바탕으로 검토할 수 있는 지원기관을 추천합니다.")
     render_rag_search_section()
+    render_workflow_section_header("5", "회의록 생성", "상담 결과와 지원기관 후보를 바탕으로 회의록 초안을 생성합니다.")
     render_document_generation_section()
 
 def chart_bar(data: pd.DataFrame, x: str, y: str, title: str = "") -> None:
@@ -3291,6 +3508,7 @@ def page_first_checklist() -> None:
     selected_label = st.selectbox("학생 선택", student_options, index=0)
     selected_student = selected_label.split(" | ")[0]
 
+    render_workflow_section_header("1", "1차 체크리스트", "학생의 학교생활에서 관찰된 신호를 입력합니다.")
     st.markdown("<div class='panel'><div class='panel-title'>1차 체크리스트</div>", unsafe_allow_html=True)
     responses = render_checklist_input(items_df, selected_student)
     calc_clicked = st.button("체크리스트 결과 계산", type="primary", use_container_width=True)
@@ -3383,14 +3601,9 @@ def page_first_checklist() -> None:
     red_flag_result = st.session_state.get("red_flag_result", {})
     counseling_areas = st.session_state.get("counseling_consideration_areas", [])
 
-    support_areas = [x.get("area") for x in counseling_areas if x.get("area")]
-    support_areas = [x for x in support_areas if x != "긴급확인"]
-    if not support_areas:
-        support_areas = first_check_result.get("primary_areas", []) or []
-    if not support_areas:
-        support_areas_text = "현재 뚜렷한 우선 영역 없음"
-    else:
-        support_areas_text = ", ".join(dict.fromkeys(support_areas))
+    active_deep_rules = st.session_state.get("active_deep_rules", [])
+    direct_areas, related_areas = get_checklist_direct_and_related_areas(first_check_result, counseling_areas, active_deep_rules)
+    direct_areas_text = ", ".join(direct_areas) if direct_areas else "현재 뚜렷한 우선 영역 없음"
 
     final_stage = first_check_result.get("final_action_stage") or context_result.get("final_action_stage", "-")
     final_reason = first_check_result.get("final_action_reason") or context_result.get("final_action_reason", "")
@@ -3401,12 +3614,15 @@ def page_first_checklist() -> None:
     with c1:
         st.markdown(metric_card("안내 단계", str(final_stage), "교사 검토용 안내"), unsafe_allow_html=True)
     with c2:
-        st.markdown(metric_card("복합 지원 영역", support_areas_text, "상담에서 함께 볼 영역"), unsafe_allow_html=True)
+        st.markdown(metric_card("주요 지원 영역", direct_areas_text, "체크리스트에서 직접 확인된 영역"), unsafe_allow_html=True)
     with c3:
         st.markdown(metric_card("우선 확인 신호", "있음" if red_flag_result.get("urgent_flag") else "없음", "필요 시 먼저 확인"), unsafe_allow_html=True)
     with c4:
         st.markdown(metric_card("권장 조치", action, "다음 단계"), unsafe_allow_html=True)
 
+    if related_areas:
+        st.markdown("<div class='small-muted' style='margin-top:8px;'>심층 분석상 함께 고려할 수 있는 영역</div>", unsafe_allow_html=True)
+        st.markdown(area_chips_html(related_areas, "area-chip-sub"), unsafe_allow_html=True)
     if final_reason:
         st.info(final_reason)
     if final_stage == "일상적 관찰":
