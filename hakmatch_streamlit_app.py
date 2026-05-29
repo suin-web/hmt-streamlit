@@ -302,9 +302,11 @@ def inject_css() -> None:
             font-weight: 900;
         }
         .metric-help {
-            font-size: 0.75rem;
-            color: #94a3b8;
+            font-size: 0.78rem;
+            color: #64748b;
             margin-top: 8px;
+            line-height: 1.45;
+            word-break: keep-all;
         }
         .student-card {
             border: 1px solid #dbe2ef;
@@ -1406,6 +1408,14 @@ def area_chips_html(areas: List[str], css_class: str = "area-chip-main") -> str:
     return f"<div class='area-chip-row'>{chips}</div>"
 
 
+def area_help_text(prefix: str, areas: List[str], empty_text: str = "추가로 표시할 영역 없음") -> str:
+    clean = [normalize_area_name(a) for a in areas if normalize_area_name(a) and normalize_area_name(a) != "긴급확인"]
+    clean = list(dict.fromkeys(clean))
+    if clean:
+        return f"{prefix}: {', '.join(clean)}"
+    return empty_text
+
+
 def get_checklist_direct_and_related_areas(first_check_result: Dict[str, Any], counseling_areas: List[Dict[str, Any]], active_deep_rules: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[str], List[str]]:
     """체크리스트에서 직접 점수가 나온 영역과 심층분석으로 함께 고려할 영역을 분리한다."""
     direct: List[str] = []
@@ -2134,14 +2144,12 @@ def render_counseling_analysis_section() -> None:
         one_line = summ.get("support_needed_reason") or summ.get("one_sentence_summary") or "상담 결과를 바탕으로 추가 검토가 필요합니다."
         target_areas = derive_integrated_support_areas(data)
         secondary = [a for a in data.get("secondary_consideration_areas", []) if a not in target_areas]
+        secondary_help = area_help_text("체크리스트상 함께 고려할 수 있는 영역", secondary, "체크리스트상 추가 고려 영역 없음")
         c1, c2 = st.columns([1.35, 1])
         with c1:
             st.markdown(analysis_summary_card(summ.get("support_needed", "-"), one_line), unsafe_allow_html=True)
         with c2:
-            st.markdown(metric_card("상담에서 확인된 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), "상담 메모 기준"), unsafe_allow_html=True)
-            if secondary:
-                st.markdown("<div class='small-muted' style='margin-top:8px;'>체크리스트상 함께 고려할 수 있는 영역</div>", unsafe_allow_html=True)
-                st.markdown(area_chips_html(secondary, "area-chip-sub"), unsafe_allow_html=True)
+            st.markdown(metric_card("상담에서 확인된 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), secondary_help), unsafe_allow_html=True)
         st.caption("AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 돕는 참고자료입니다.")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2944,9 +2952,10 @@ def render_rag_search_section() -> None:
     adjacency = load_json_with_fallback(JSON_PATHS.get("district_adjacency", []))
     allowed = get_allowed_districts(school.get("자치구", ""), adjacency)
     target_areas_preview = derive_integrated_support_areas(analysis)
+    secondary_preview = [a for a in analysis.get("secondary_consideration_areas", []) if a not in target_areas_preview]
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(metric_card("상담에서 확인된 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), "상담 메모 기준"), unsafe_allow_html=True)
+        st.markdown(metric_card("상담에서 확인된 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), area_help_text("체크리스트상 함께 고려할 수 있는 영역", secondary_preview, "체크리스트상 추가 고려 영역 없음")), unsafe_allow_html=True)
     with c2:
         st.markdown(metric_card("학교 자치구", school.get("자치구", "-"), "지역 기준"), unsafe_allow_html=True)
     with c3:
@@ -3382,14 +3391,28 @@ def render_document_generation_section() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 def render_followup_workflow_sections() -> None:
-    render_workflow_section_header("2", "2차 상담 질문 만들기", "체크리스트 결과를 바탕으로 학생과 대화할 때 활용할 질문을 제안합니다.")
-    render_counseling_question_section()
-    render_workflow_section_header("3", "2차 상담 결과 정리", "상담 메모에서 확인된 신호를 간단히 정리하고, 실제로 함께 볼 지원 영역을 좁힙니다.")
-    render_counseling_analysis_section()
-    render_workflow_section_header("4", "지원기관 추천", "상담 결과와 학교 위치를 바탕으로 검토할 수 있는 지원기관을 추천합니다.")
-    render_rag_search_section()
-    render_workflow_section_header("5", "회의록 생성", "상담 결과와 지원기관 후보를 바탕으로 회의록 초안을 생성합니다.")
-    render_document_generation_section()
+    # 각 단계는 이전 단계가 완료된 뒤에만 표시해 실제 사용자가 한 번에 과도한 정보를 보지 않도록 한다.
+    with st.container(border=True):
+        render_workflow_section_header("2", "2차 상담 질문 만들기", "체크리스트 결과를 바탕으로 학생과 대화할 때 활용할 질문을 제안합니다.")
+        render_counseling_question_section()
+
+    if not st.session_state.get("generated_counseling_questions"):
+        return
+    with st.container(border=True):
+        render_workflow_section_header("3", "2차 상담 결과 정리", "상담 메모에서 확인된 신호를 간단히 정리하고, 실제로 함께 볼 지원 영역을 좁힙니다.")
+        render_counseling_analysis_section()
+
+    if not st.session_state.get("structured_counseling_analysis"):
+        return
+    with st.container(border=True):
+        render_workflow_section_header("4", "지원기관 추천", "상담 결과와 학교 위치를 바탕으로 검토할 수 있는 지원기관을 추천합니다.")
+        render_rag_search_section()
+
+    if not st.session_state.get("resource_recommendation_explanation") and not st.session_state.get("rag_search_results"):
+        return
+    with st.container(border=True):
+        render_workflow_section_header("5", "회의록 생성", "상담 결과와 지원기관 후보를 바탕으로 회의록 초안을 생성합니다.")
+        render_document_generation_section()
 
 def chart_bar(data: pd.DataFrame, x: str, y: str, title: str = "") -> None:
     if px is None:
@@ -3604,6 +3627,7 @@ def page_first_checklist() -> None:
     active_deep_rules = st.session_state.get("active_deep_rules", [])
     direct_areas, related_areas = get_checklist_direct_and_related_areas(first_check_result, counseling_areas, active_deep_rules)
     direct_areas_text = ", ".join(direct_areas) if direct_areas else "현재 뚜렷한 우선 영역 없음"
+    related_areas_help = area_help_text("심층 분석상 함께 고려할 수 있는 영역", related_areas, "심층 분석상 추가 고려 영역 없음")
 
     final_stage = first_check_result.get("final_action_stage") or context_result.get("final_action_stage", "-")
     final_reason = first_check_result.get("final_action_reason") or context_result.get("final_action_reason", "")
@@ -3614,15 +3638,11 @@ def page_first_checklist() -> None:
     with c1:
         st.markdown(metric_card("안내 단계", str(final_stage), "교사 검토용 안내"), unsafe_allow_html=True)
     with c2:
-        st.markdown(metric_card("주요 지원 영역", direct_areas_text, "체크리스트에서 직접 확인된 영역"), unsafe_allow_html=True)
+        st.markdown(metric_card("주요 지원 영역", direct_areas_text, related_areas_help), unsafe_allow_html=True)
     with c3:
         st.markdown(metric_card("우선 확인 신호", "있음" if red_flag_result.get("urgent_flag") else "없음", "필요 시 먼저 확인"), unsafe_allow_html=True)
     with c4:
-        st.markdown(metric_card("권장 조치", action, "다음 단계"), unsafe_allow_html=True)
-
-    if related_areas:
-        st.markdown("<div class='small-muted' style='margin-top:8px;'>심층 분석상 함께 고려할 수 있는 영역</div>", unsafe_allow_html=True)
-        st.markdown(area_chips_html(related_areas, "area-chip-sub"), unsafe_allow_html=True)
+        st.markdown(metric_card("권장 조치", action, "교사 참고"), unsafe_allow_html=True)
     if final_reason:
         st.info(final_reason)
     if final_stage == "일상적 관찰":
@@ -3632,7 +3652,7 @@ def page_first_checklist() -> None:
     elif final_stage == "심층 파악 권고":
         st.caption("2차 상담 질문을 통해 한 번 더 확인하는 것이 권장됩니다.")
     else:
-        st.caption("다음 단계에서 2차 상담 질문을 생성하여 학생의 어려움을 조금 더 구체적으로 확인할 수 있습니다.")
+        st.caption("학생과의 추가 상담을 통해 어려움을 조금 더 구체적으로 확인할 수 있습니다.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     render_followup_workflow_sections()
