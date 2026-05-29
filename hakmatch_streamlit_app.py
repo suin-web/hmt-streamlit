@@ -40,6 +40,7 @@ import streamlit as st
 from gemini_client import call_llm_with_validation, get_gemini_api_key
 from validation import (
     HARD_BANNED_COMMON,
+    sanitize_generated_data,
     validate_counseling_question_output,
     validate_counseling_analysis_output,
     validate_resource_recommendation_output,
@@ -1639,7 +1640,7 @@ def build_counseling_question_user_prompt(payload: Dict[str, Any]) -> str:
   ],
   "urgent_check_guidance": {{"urgent_check_needed": false, "guidance": ""}},
   "teacher_recording_guide": ["상담 후 교사가 기록하면 좋은 내용 1", "기록 내용 2", "기록 내용 3"],
-  "next_step_hint": "상담 후 교사 메모를 입력하면 지원 영역 구조화, 지역기관 추천, 협의록 초안 생성으로 연결할 수 있다."
+  "next_step_hint": "상담 후 교사 메모를 입력하면 지원 영역 구조화, 지역기관 추천, 회의록 초안 생성으로 연결할 수 있다."
 }}
 """.strip()
 
@@ -1715,7 +1716,7 @@ def render_counseling_question_section() -> None:
                 save_llm_result("generated_counseling_questions", "generated_counseling_questions_payload_hash", payload_hash, result["data"])
                 st.success("2차 상담 질문 생성이 완료되었습니다.")
             else:
-                st.error("상담 질문 생성에 실패했습니다: " + str(result.get("error")))
+                render_user_friendly_generation_error("상담 질문 생성", result.get("error"))
     data = st.session_state.get("generated_counseling_questions")
     if data:
         summary = data.get("counseling_focus_summary", "")
@@ -1766,7 +1767,7 @@ def build_counseling_analysis_payload(
 def build_counseling_analysis_system_prompt() -> str:
     return """
 너는 학생맞춤통합지원 업무를 돕는 교사용 AI 상담 결과 분석 보조도구이다.
-교사가 입력한 2차 상담 결과 메모를 읽고 맞춤 검색과 협의록 초안 생성에 사용할 수 있도록 핵심 정보를 구조화한다.
+교사가 입력한 2차 상담 결과 메모를 읽고 맞춤 검색과 회의록 초안 생성에 사용할 수 있도록 핵심 정보를 구조화한다.
 학생을 진단하거나 판정하지 말고, 상담 메모와 제공된 자료에 근거한 정보만 정리한다.
 이 단계에서는 urgent_flag, Red Flag, 긴급확인 분기를 사용하지 않는다.
 출력은 반드시 지정된 JSON 형식으로만 작성한다.
@@ -1776,7 +1777,7 @@ def build_counseling_analysis_system_prompt() -> str:
 def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
     return f"""
 아래 자료를 바탕으로 2차 상담 결과를 구조화하라.
-이 단계의 목적은 기관 추천이나 협의록 완성이 아니라, 다음 단계인 맞춤 검색과 협의록 초안 생성을 위한 구조화된 입력값을 만드는 것이다.
+이 단계의 목적은 기관 추천이나 회의록 완성이 아니라, 다음 단계인 맞춤 검색과 회의록 초안 생성을 위한 구조화된 입력값을 만드는 것이다.
 이 단계에서는 urgent_flag, Red Flag, 긴급확인 분기를 사용하지 않는다.
 
 [1차 체크리스트 결과]
@@ -1816,7 +1817,7 @@ def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
     {{"query": "맞춤 검색 질의", "target_collection": "policy_chunks / service_catalog / resource_catalog", "purpose": "검색 목적"}}
   ],
   "meeting_record_inputs": {{
-    "counseling_summary": "협의록용 상담 요약",
+    "counseling_summary": "회의록용 상담 요약",
     "discussion_points": ["논의 안건"],
     "teacher_confirmation_items": ["교사 확인사항"],
     "guardian_contact_considerations": ["보호자 상담 또는 동의 관련 확인사항"],
@@ -1894,7 +1895,7 @@ def render_counseling_analysis_section() -> None:
                 st.session_state["existing_support_info"] = existing
                 st.success("상담 결과 분석이 완료되었습니다.")
             else:
-                st.error("상담 결과 분석에 실패했습니다: " + str(result.get("error")))
+                render_user_friendly_generation_error("상담 결과 분석", result.get("error"))
     data = st.session_state.get("structured_counseling_analysis")
     if data:
         summ = data.get("analysis_summary", {})
@@ -1914,6 +1915,22 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-
 
 
 
+
+
+
+def render_user_friendly_generation_error(task_name: str, error: Any = None) -> None:
+    """내부 검증 실패 사유를 사용자에게 직접 노출하지 않고 안내한다."""
+    msg = str(error or "")
+    # API/서버 상태는 사용자가 취할 수 있는 행동이 있어 간단히 안내하고,
+    # 금지표현·JSON·필드명 같은 내부 검증 사유는 숨긴다.
+    if "사용량 제한" in msg or "무료 등급" in msg:
+        st.warning(f"{task_name}을(를) 잠시 중단했습니다. 오늘의 AI 생성 사용량이 많습니다. 잠시 후 다시 시도하거나 기존 생성 결과를 사용해 주세요.")
+    elif "일시적으로 혼잡" in msg or "서버" in msg:
+        st.warning(f"{task_name}을(를) 잠시 완료하지 못했습니다. AI 생성 서비스가 일시적으로 혼잡합니다. 잠시 후 다시 시도해 주세요.")
+    elif "API 키" in msg or "접근 권한" in msg:
+        st.warning(f"{task_name}을(를) 실행할 수 없습니다. 관리자에게 AI 생성 기능 설정 확인을 요청해 주세요.")
+    else:
+        st.warning(f"{task_name}을(를) 완성하지 못했습니다. 생성된 내용을 업무 표현 기준에 맞게 정리하지 못했습니다. 다시 시도해 주세요.")
 
 def stable_payload_hash(payload: Any) -> str:
     """동일 입력값에 대해 API 재호출을 막기 위한 안정적인 해시."""
@@ -2585,7 +2602,7 @@ def generate_resource_recommendation_for_results(rag: Dict[str, Any]) -> Optiona
     if result.get("success"):
         save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, result["data"])
         return result["data"]
-    st.warning("기관 추천 이유 생성에 실패했습니다. 기관 후보는 표시되지만 추천 이유는 비어 있을 수 있습니다. " + str(result.get("error")))
+    render_user_friendly_generation_error("추천 이유 생성", result.get("error"))
     return None
 
 
@@ -2640,8 +2657,6 @@ def render_rag_search_section() -> None:
 
     if st.button("지원기관 추천하기", type="primary", use_container_width=True, key="btn_run_rag"):
         with st.spinner("지원기관 후보를 찾고 추천 이유를 생성하고 있습니다..."):
-            st.session_state.pop("resource_recommendation_explanation", None)
-            st.session_state.pop("resource_recommendation_explanation_payload_hash", None)
             st.session_state.pop("generated_document_json", None)
             st.session_state.pop("generated_document_json_payload_hash", None)
             st.session_state.pop("generated_docx_files", None)
@@ -2658,6 +2673,8 @@ def render_rag_search_section() -> None:
                 if use_cached_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash):
                     pass
                 else:
+                    st.session_state.pop("resource_recommendation_explanation", None)
+                    st.session_state.pop("resource_recommendation_explanation_payload_hash", None)
                     ranked = results.get("ranked_resources", [])
                     policy = results.get("policy_evidence", [])
                     rec_result = call_llm_with_validation(
@@ -2670,7 +2687,7 @@ def render_rag_search_section() -> None:
                     if rec_result["success"]:
                         save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, rec_result["data"])
                     else:
-                        st.warning("추천 이유 생성에 실패했습니다. 기관 후보만 먼저 표시합니다: " + str(rec_result.get("error")))
+                        render_user_friendly_generation_error("추천 이유 생성", rec_result.get("error"))
             elif results and not get_gemini_api_key():
                 st.warning("API 키가 설정되어 있지 않아 추천 이유는 표시하지 않습니다.")
 
@@ -2799,7 +2816,7 @@ recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값
       "location_or_access_basis": "지역·접근성 관련 설명",
       "teacher_confirmation_items": ["교사가 확인해야 할 사항"],
       "referral_cautions": ["연계 시 유의사항"],
-      "meeting_record_sentence": "협의록에 넣을 수 있는 문장"
+      "meeting_record_sentence": "회의록에 넣을 수 있는 문장"
     }}
   ],
   "if_no_suitable_resource": {{"no_resource_flag": false, "reason": "", "suggested_next_steps": []}},
@@ -2915,6 +2932,7 @@ def validate_meeting_generation_output(output_text: str, allowed_resource_names:
         return {"ok": False, "message": f"JSON 형식이 올바르지 않습니다: {exc}", "parsed_data": None, "warnings": []}
     if not isinstance(data, dict):
         return {"ok": False, "message": "출력은 JSON 객체여야 합니다.", "parsed_data": None, "warnings": []}
+    data = sanitize_generated_data(data)
     mr = data.get("meeting_record")
     if not isinstance(mr, dict):
         return {"ok": False, "message": "meeting_record가 필요합니다.", "parsed_data": None, "warnings": []}
@@ -3036,8 +3054,6 @@ def render_document_generation_section() -> None:
                 generated_files = {}
                 meeting_basic = {"meeting_date": meeting_date, "writer": writer, "place": place, "attendees": attendees, "agenda": agenda_user}
                 tpl = TEMPLATE_DIR / "회의록.docx"
-                if not tpl.exists():
-                    tpl = TEMPLATE_DIR / "협의록.docx"
                 out = out_dir / f"통합지원팀_회의록_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
                 if not tpl.exists():
                     st.error("templates/회의록.docx 템플릿을 찾을 수 없습니다.")
@@ -3045,7 +3061,7 @@ def render_document_generation_section() -> None:
                     fill_meeting_docx(tpl, out, meeting_basic, result["data"])
                     ok, msg = validate_generated_docx(out)
                     if not ok:
-                        st.warning("회의록 확인 필요: " + msg)
+                        st.warning("회의록 서식 확인이 필요합니다. 다운로드 후 내용을 확인해 주세요.")
                     generated_files["meeting"] = out
                     st.session_state["generated_docx_files"] = {k: str(v) for k, v in generated_files.items()}
                     st.success("회의록 생성이 완료되었습니다.")
@@ -3058,7 +3074,7 @@ def render_document_generation_section() -> None:
                         for item in mr.get("support_plan", mr.get("decision_items", [])):
                             st.write("- " + str(item))
             else:
-                st.error("회의록 생성에 실패했습니다: " + str(result.get("error")))
+                render_user_friendly_generation_error("회의록 생성", result.get("error"))
     files = st.session_state.get("generated_docx_files", {})
     if files.get("meeting") and Path(files["meeting"]).exists():
         st.download_button("회의록 DOCX 다운로드", Path(files["meeting"]).read_bytes(), Path(files["meeting"]).name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)

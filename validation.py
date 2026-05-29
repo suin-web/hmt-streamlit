@@ -26,6 +26,50 @@ def _contains_any(text: str, words: List[str]) -> List[str]:
     return [w for w in words if w and w in text]
 
 
+SANITIZE_REPLACEMENTS = [
+    ("가정에 문제가 있니", "집이나 생활에서 도움이 필요한 부분이 있나요"),
+    ("친구들과 문제가 있니", "친구들과 지내는 데 어려움이 있나요"),
+    ("가정에 문제가 있다", "가정 내 어려움을 확인할 필요가 있다"),
+    ("가정에 문제가 있습니다", "가정 내 어려움을 확인할 필요가 있습니다"),
+    ("문제가 있니", "어려움이 있나요"),
+    ("문제가 있다", "어려움이 관찰됩니다"),
+    ("문제가 있습니다", "어려움이 관찰됩니다"),
+    ("문제가 있는", "어려움이 확인되는"),
+    ("문제 학생", "지원 검토가 필요한 학생"),
+    ("위험 학생", "우선 확인이 필요한 학생"),
+    ("부적응 학생", "학교생활 적응 지원이 필요한 학생"),
+    ("비행 행동", "규칙 준수 관련 어려움"),
+    ("우울증이니", "마음이 많이 힘든 순간이 있나요"),
+    ("불안장애 있어", "불안하거나 부담되는 순간이 있나요"),
+    ("중독됐니", "사용 조절이 어렵게 느껴지는 부분이 있나요"),
+    ("우울증", "정서적 어려움"),
+    ("불안장애", "정서적 불안정"),
+    ("방임 상태", "돌봄 공백 가능성"),
+    ("학대 확정", "보호 필요 여부 확인"),
+    ("중독", "과의존"),
+    ("비정상", "추가 확인이 필요한 상태"),
+    ("반드시 연계", "연계 검토"),
+]
+
+
+def _sanitize_generated_text(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    out = text
+    for src, dst in SANITIZE_REPLACEMENTS:
+        out = out.replace(src, dst)
+    return out
+
+
+def sanitize_generated_data(data: Any) -> Any:
+    """사용자에게 보일 생성 결과에서 과도하게 단정적인 표현을 부드럽게 바꾼다."""
+    if isinstance(data, dict):
+        return {k: sanitize_generated_data(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [sanitize_generated_data(v) for v in data]
+    return _sanitize_generated_text(data)
+
+
 HARD_BANNED_COMMON = [
     "위험 학생", "문제 학생", "부적응 학생", "비행 행동", "우울증", "불안장애", "방임 상태",
     "학대 확정", "중독", "비정상", "반드시 연계", "문제가 있다", "가정에 문제가 있다",
@@ -51,6 +95,7 @@ def validate_counseling_question_output(output_text: str, red_flag_result: Dict[
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
+    parsed = sanitize_generated_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     banned = _contains_any(text, QUESTION_HARD_BANNED)
     if banned:
@@ -83,6 +128,7 @@ def validate_counseling_analysis_output(output_text: str, teacher_counseling_not
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
+    parsed = sanitize_generated_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_reasons", "urgent_notice", "긴급확인"]):
         return {"ok": False, "message": "상담 결과 분석 단계에는 urgent 또는 긴급확인 관련 필드를 포함하지 않습니다.", "parsed_data": None, "warnings": []}
@@ -163,6 +209,7 @@ def validate_resource_recommendation_output(output_text: str, ranked_resources: 
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
+    parsed = sanitize_generated_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_notice", "urgent_reasons", "긴급확인"]):
         return {"ok": False, "message": "기관 추천 이유 단계에는 urgent 또는 긴급확인 관련 필드를 포함하지 않습니다.", "parsed_data": None, "warnings": []}
@@ -260,6 +307,7 @@ def validate_document_generation_output(output_text: str, allowed_resource_names
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
+    parsed = sanitize_generated_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_notice", "urgent_reasons", "긴급확인"]):
         return {"ok": False, "message": "회의록 생성 단계에는 urgent 또는 긴급확인 관련 내용을 포함하지 않습니다.", "parsed_data": None, "warnings": []}
