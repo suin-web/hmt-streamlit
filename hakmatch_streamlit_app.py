@@ -565,12 +565,29 @@ def school_row_to_dict(row: pd.Series) -> Dict[str, Any]:
     def yes(v: Any) -> bool:
         return normalize_text(v) in ["있음", "Y", "예", "1", "True", "true", "해당"]
 
+    def first_number(keys: List[str]) -> Optional[float]:
+        for key in keys:
+            try:
+                if key in row.index:
+                    value = get_cell(row, key, None)
+                    if value is not None:
+                        return value
+            except Exception:
+                continue
+        return None
+
+    # 학교 DB에는 위도/경도 컬럼이 있으나, 기존 코드가 selected_school_info를 만들 때
+    # 해당 값을 제외하고 있어 RAG 접근성 거리 계산에서 학교 좌표를 찾지 못했다.
+    # 여러 가능한 컬럼명을 표준 키와 별칭에 함께 저장해 이후 거리 계산 함수가 안정적으로 읽도록 한다.
+    school_lat = first_number(["위도", "학교_위도", "학교위도", "latitude", "lat", "school_latitude", "Y", "y"])
+    school_lon = first_number(["경도", "학교_경도", "학교경도", "longitude", "lon", "lng", "school_longitude", "X", "x"])
+
     return {
         "자치구": normalize_text(row.get("자치구", "")),
         "교육지원청": normalize_text(row.get("교육지원청", "")),
         "학교급": normalize_text(row.get("학교급", "")),
         "학교명": normalize_text(row.get("학교명", "")),
-        "학교_주소": normalize_text(row.get("학교_주소", "")),
+        "학교_주소": normalize_text(row.get("학교_주소", row.get("주소", ""))),
         "대표_전화번호": normalize_text(row.get("대표_전화번호", "")),
         "홈페이지_URL": normalize_text(row.get("홈페이지_URL", "")),
         "학교_학생수": get_cell(row, "학교_학생수", 0),
@@ -582,6 +599,12 @@ def school_row_to_dict(row: pd.Series) -> Dict[str, Any]:
         "진로상담실_있음": yes(row.get("진로상담실_있음", "")),
         "방과후교과프로그램수": get_cell(row, "방과후교과프로그램수", 0),
         "방과후특기적성프로그램수": get_cell(row, "방과후특기적성프로그램수", 0),
+        "위도": school_lat,
+        "경도": school_lon,
+        "latitude": school_lat,
+        "longitude": school_lon,
+        "school_latitude": school_lat,
+        "school_longitude": school_lon,
     }
 
 # -----------------------------------------------------------------------------
@@ -2090,8 +2113,8 @@ def format_distance_km(value: Any) -> str:
 def calculate_location_score(candidate: Dict[str, Any], selected_school_district: str, school_lat: Optional[float], school_lon: Optional[float], allowed_districts: List[str]) -> Tuple[float, Optional[float]]:
     meta = candidate.get("metadata", {}) or {}
     district = meta.get("district") or meta.get("자치구") or ""
-    lat = get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "기관위도", "y", "Y"])
-    lon = get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "기관경도", "x", "X"])
+    lat = get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "resource_lat", "기관위도", "기관_위도", "시설위도", "시설_위도", "center_latitude", "y", "Y"])
+    lon = get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "resource_lon", "resource_lng", "기관경도", "기관_경도", "시설경도", "시설_경도", "center_longitude", "x", "X"])
     distance = None
     if school_lat is not None and school_lon is not None and lat is not None and lon is not None:
         distance = haversine_km(school_lat, school_lon, lat, lon)
@@ -2133,8 +2156,8 @@ def rank_resource_candidates(filtered_candidates: List[Dict[str, Any]], selected
             "address": address,
             "phone": phone,
             "homepage": meta.get("homepage") or meta.get("homepage_url") or meta.get("홈페이지") or "",
-            "latitude": get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "기관위도", "y", "Y"]),
-            "longitude": get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "기관경도", "x", "X"]),
+            "latitude": get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "resource_lat", "기관위도", "기관_위도", "시설위도", "시설_위도", "center_latitude", "y", "Y"]),
+            "longitude": get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "resource_lon", "resource_lng", "기관경도", "기관_경도", "시설경도", "시설_경도", "center_longitude", "x", "X"]),
             "distance_km": distance_km,
             "student_fit_score": round(student_fit, 1),
             "location_score": round(location_score, 1),
@@ -2213,6 +2236,9 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
             "primary_area": primary_area,
             "selected_school_district": district,
             "selected_school_level": normalize_school_level(level),
+            "selected_school_latitude": get_first_coordinate_value(school, ["위도", "latitude", "lat", "school_latitude", "학교위도", "학교_위도", "y", "Y"]),
+            "selected_school_longitude": get_first_coordinate_value(school, ["경도", "longitude", "lon", "lng", "school_longitude", "학교경도", "학교_경도", "x", "X"]),
+            "school_coordinate_found": get_first_coordinate_value(school, ["위도", "latitude", "lat", "school_latitude", "학교위도", "학교_위도", "y", "Y"]) is not None and get_first_coordinate_value(school, ["경도", "longitude", "lon", "lng", "school_longitude", "학교경도", "학교_경도", "x", "X"]) is not None,
             "allowed_districts": allowed_districts,
             "existing_support_info": existing,
             "used_query_count": len(queries),
@@ -2239,6 +2265,12 @@ def render_rag_search_section() -> None:
     with c3: st.markdown(metric_card("학교급", school.get("학교급", "-"), "대상 필터 기준"), unsafe_allow_html=True)
     with c4: st.markdown(metric_card("기존 지원", st.session_state.get("existing_support_info", "-"), "중복 지원 점검"), unsafe_allow_html=True)
     st.caption("인접 자치구: " + (", ".join(allowed[1:]) if len(allowed) > 1 else "정보 없음"))
+    school_lat = get_first_coordinate_value(school, ["위도", "latitude", "lat", "school_latitude", "학교위도", "학교_위도", "y", "Y"])
+    school_lon = get_first_coordinate_value(school, ["경도", "longitude", "lon", "lng", "school_longitude", "학교경도", "학교_경도", "x", "X"])
+    if school_lat is None or school_lon is None:
+        st.caption("학교 좌표: 학교 DB에서 위도/경도 값을 찾지 못해 거리 km는 표시되지 않을 수 있습니다.")
+    else:
+        st.caption(f"학교 좌표 확인: 위도 {school_lat:.6f}, 경도 {school_lon:.6f}")
     if st.button("RAG 검색 실행하기", type="primary", use_container_width=True, key="btn_run_rag"):
         with st.spinner("공식 근거와 지역기관 후보를 검색하고 있습니다..."):
             run_rag_search()
@@ -2338,6 +2370,13 @@ recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값
 
 [RAG 검색 결과: 지역기관 후보]
 {_safe_json(payload.get('ranked_resources'))}
+
+[공식 근거 작성 규칙]
+- official_basis는 반드시 위 [RAG 검색 결과: 공식 근거]에 있는 policy_evidence에서만 작성한다.
+- official_basis.source_doc에는 policy_evidence의 source_doc 값을 그대로 복사한다.
+- service_catalog, resource_catalog, 기관 후보명, 서비스 카탈로그명은 official_basis.source_doc에 쓰지 않는다.
+- 서비스 카탈로그와 기관 후보에서 얻은 내용은 recommendation_reasons, teacher_confirmation_items, location_or_access_basis에만 반영한다.
+- 사용할 수 있는 policy_evidence가 없으면 official_basis는 빈 리스트 []로 둔다.
 
 출력 형식:
 {{
