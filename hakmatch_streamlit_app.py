@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import json
+import hashlib
 import math
 import os
 import re
@@ -1683,16 +1684,21 @@ def render_counseling_question_section() -> None:
                 "context_result": st.session_state.get("context_result", {}),
                 "official_checklist_context": official_context,
             }
-            with st.spinner("2차 상담 질문을 생성하고 있습니다..."):
-                result = call_llm_with_validation(
-                    build_counseling_question_system_prompt(),
-                    build_counseling_question_user_prompt(payload),
-                    validate_counseling_question_output,
-                    build_counseling_question_repair_prompt,
-                    validation_kwargs={"red_flag_result": red_flag_result, "counseling_consideration_areas": counseling_areas},
-                )
+            payload_hash = stable_payload_hash(payload)
+            if use_cached_llm_result("generated_counseling_questions", "generated_counseling_questions_payload_hash", payload_hash):
+                st.info("같은 입력값으로 이미 생성된 상담 질문을 재사용합니다. API를 다시 호출하지 않았습니다.")
+                result = {"success": True, "data": st.session_state["generated_counseling_questions"], "warnings": []}
+            else:
+                with st.spinner("2차 상담 질문을 생성하고 있습니다..."):
+                    result = call_llm_with_validation(
+                        build_counseling_question_system_prompt(),
+                        build_counseling_question_user_prompt(payload),
+                        validate_counseling_question_output,
+                        build_counseling_question_repair_prompt,
+                        validation_kwargs={"red_flag_result": red_flag_result, "counseling_consideration_areas": counseling_areas},
+                    )
             if result["success"]:
-                st.session_state["generated_counseling_questions"] = result["data"]
+                save_llm_result("generated_counseling_questions", "generated_counseling_questions_payload_hash", payload_hash, result["data"])
                 st.success("2차 상담 질문 생성이 완료되었습니다.")
                 if result.get("warnings"):
                     st.warning("검증 경고: " + " / ".join(map(str, result["warnings"][:3])))
@@ -1789,6 +1795,9 @@ def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
 [기존 지원 여부]
 {payload.get('existing_support_info')}
 
+[복합 검토 지원 영역]
+{_safe_json(payload.get('target_areas'))}
+
 출력 형식:
 {{
   "analysis_summary": {{
@@ -1863,16 +1872,21 @@ def render_counseling_analysis_section() -> None:
                 judgment,
                 existing,
             )
-            with st.spinner("상담 결과 메모를 구조화하고 있습니다..."):
-                result = call_llm_with_validation(
-                    build_counseling_analysis_system_prompt(),
-                    build_counseling_analysis_user_prompt(payload),
-                    validate_counseling_analysis_output,
-                    build_counseling_analysis_repair_prompt,
-                    validation_kwargs={"teacher_counseling_note": note},
-                )
+            payload_hash = stable_payload_hash(payload)
+            if use_cached_llm_result("structured_counseling_analysis", "structured_counseling_analysis_payload_hash", payload_hash):
+                st.info("같은 상담 메모로 이미 분석된 결과를 재사용합니다. API를 다시 호출하지 않았습니다.")
+                result = {"success": True, "data": st.session_state["structured_counseling_analysis"], "warnings": []}
+            else:
+                with st.spinner("상담 결과 메모를 구조화하고 있습니다..."):
+                    result = call_llm_with_validation(
+                        build_counseling_analysis_system_prompt(),
+                        build_counseling_analysis_user_prompt(payload),
+                        validate_counseling_analysis_output,
+                        build_counseling_analysis_repair_prompt,
+                        validation_kwargs={"teacher_counseling_note": note},
+                    )
             if result["success"]:
-                st.session_state["structured_counseling_analysis"] = result["data"]
+                save_llm_result("structured_counseling_analysis", "structured_counseling_analysis_payload_hash", payload_hash, result["data"])
                 st.session_state["teacher_counseling_note"] = note
                 st.session_state["teacher_support_judgment"] = judgment
                 st.session_state["existing_support_info"] = existing
@@ -1905,6 +1919,26 @@ def render_counseling_analysis_section() -> None:
 
 # ------------------------------ RAG 검색 ------------------------------
 EMBEDDING_MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-v1"
+
+
+
+
+def stable_payload_hash(payload: Any) -> str:
+    """동일 입력값에 대해 API 재호출을 막기 위한 안정적인 해시."""
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        raw = str(payload)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def use_cached_llm_result(result_key: str, hash_key: str, payload_hash: str) -> bool:
+    return bool(st.session_state.get(result_key)) and st.session_state.get(hash_key) == payload_hash
+
+
+def save_llm_result(result_key: str, hash_key: str, payload_hash: str, data: Any) -> None:
+    st.session_state[result_key] = data
+    st.session_state[hash_key] = payload_hash
 
 
 def parse_pipe_list(value: Any) -> List[str]:
@@ -2028,6 +2062,249 @@ def query_chroma_collection(client: Any, collection_name: str, query: str, n_res
     return out
 
 
+
+
+def resolve_candidate_district(metadata: Dict[str, Any], allowed_districts: Optional[List[str]] = None) -> str:
+    """metadata의 district가 잘못 들어간 경우 filter_district_list/address를 함께 보고 실제 자치구를 고른다."""
+    allowed_districts = allowed_districts or []
+    district = str(metadata.get("district") or metadata.get("자치구") or "").strip()
+    dist_list = parse_pipe_list(metadata.get("filter_district_list") or metadata.get("districts_covered") or metadata.get("district") or metadata.get("자치구"))
+    if allowed_districts:
+        for d in dist_list:
+            if d in allowed_districts:
+                return d
+        for key in ["address", "주소", "resource_address", "기관주소"]:
+            text = str(metadata.get(key, ""))
+            for d in allowed_districts:
+                if d in text:
+                    return d
+    if district:
+        return district
+    return dist_list[0] if dist_list else ""
+
+
+def extract_support_areas_from_metadata(metadata: Dict[str, Any]) -> List[str]:
+    """기관 metadata에 담긴 지원영역을 표준 영역 리스트로 변환한다."""
+    support_list = [
+        normalize_area_name(x)
+        for x in parse_pipe_list(
+            metadata.get("filter_support_area_list")
+            or metadata.get("support_area")
+            or metadata.get("linked_area")
+            or metadata.get("지원영역")
+        )
+    ]
+    # 중복 제거 및 공백 제거
+    out: List[str] = []
+    for area in support_list:
+        if area and area not in out:
+            out.append(area)
+    return out
+
+
+def normalize_target_areas(areas: Any) -> List[str]:
+    """RAG 검색·필터링에서 사용할 복합 지원 영역 리스트를 정리한다."""
+    if areas is None:
+        return []
+    if isinstance(areas, str):
+        raw = parse_pipe_list(areas)
+    elif isinstance(areas, (list, tuple, set)):
+        raw = list(areas)
+    else:
+        raw = [areas]
+    out: List[str] = []
+    for area in raw:
+        norm = normalize_area_name(area)
+        if norm in SUPPORT_AREAS and norm not in out:
+            out.append(norm)
+    return out
+
+
+def derive_integrated_support_areas(analysis: Dict[str, Any]) -> List[str]:
+    """상담 결과, 1차 체크리스트 고려 영역, 심층 유도 분석을 종합해 RAG에서 함께 볼 영역을 만든다.
+
+    기존 구현은 analysis['primary_area'] 하나만 RAG 필터 기준으로 사용했다.
+    이 함수는 학생맞춤통합지원의 복합지원 취지에 맞게 primary_area 외에도
+    key_signals.linked_areas, 상담 고려 영역, 심층 유도 분석의 linked_areas/counseling_question_areas,
+    생성된 상담 질문의 areas_to_confirm를 함께 사용한다.
+    """
+    target: List[str] = []
+
+    def add_many(values: Any) -> None:
+        for area in normalize_target_areas(values):
+            if area not in target:
+                target.append(area)
+
+    add_many(analysis.get("primary_area"))
+
+    for sig in analysis.get("key_signals", []) or []:
+        add_many(sig.get("linked_areas", []))
+
+    for q in analysis.get("rag_search_queries", []) or []:
+        # 질의 텍스트 안에 영역명이 직접 들어온 경우도 보조적으로 반영
+        qtext = str(q.get("query", ""))
+        for area in SUPPORT_AREAS:
+            if area in qtext and area not in target:
+                target.append(area)
+
+    for area_obj in st.session_state.get("counseling_consideration_areas", []) or []:
+        add_many(area_obj.get("area"))
+
+    for rule in st.session_state.get("active_deep_rules", []) or []:
+        add_many(rule.get("linked_areas", []))
+        add_many(rule.get("counseling_question_areas", []))
+
+    generated_questions = st.session_state.get("generated_counseling_questions", {}) or {}
+    basis = generated_questions.get("question_generation_basis", {}) or {}
+    add_many(basis.get("primary_areas", []))
+    add_many(basis.get("secondary_areas", []))
+    for area_obj in generated_questions.get("areas_to_confirm", []) or []:
+        add_many(area_obj.get("area"))
+    for q in generated_questions.get("recommended_questions", []) or []:
+        add_many(q.get("linked_area"))
+
+    if not target:
+        add_many("공통")
+    return target or ["공통"]
+
+
+def metadata_support_matches(metadata: Dict[str, Any], target_areas: Any) -> bool:
+    support_list = extract_support_areas_from_metadata(metadata)
+    areas = normalize_target_areas(target_areas)
+    if not areas:
+        return bool("공통" in support_list or not support_list)
+    return bool(any(area in support_list for area in areas) or "공통" in support_list or not support_list)
+
+
+def get_support_area_matches(metadata: Dict[str, Any], target_areas: Any) -> List[str]:
+    support_list = extract_support_areas_from_metadata(metadata)
+    areas = normalize_target_areas(target_areas)
+    matches = [area for area in areas if area in support_list]
+    if not matches and "공통" in support_list:
+        matches = ["공통"]
+    return matches
+
+
+def metadata_level_matches(metadata: Dict[str, Any], selected_school_level: str) -> bool:
+    level_list = [normalize_school_level(x) for x in parse_pipe_list(metadata.get("filter_school_level_list") or metadata.get("target_school_levels") or metadata.get("target_school_level"))]
+    selected_level = normalize_school_level(selected_school_level)
+    return bool(not level_list or "전체" in level_list or "공통" in level_list or selected_level in level_list)
+
+
+def metadata_district_matches(metadata: Dict[str, Any], allowed_districts: List[str]) -> bool:
+    if is_common_or_wide_area_candidate(metadata):
+        return True
+    if not allowed_districts:
+        return True
+    dist_list = parse_pipe_list(metadata.get("filter_district_list") or metadata.get("districts_covered") or metadata.get("district") or metadata.get("자치구"))
+    if any(d in allowed_districts for d in dist_list):
+        return True
+    address = " ".join(str(metadata.get(k, "")) for k in ["address", "주소", "resource_address", "기관주소"])
+    return any(d in address for d in allowed_districts)
+
+
+def pseudo_distance_for_metadata_candidate(metadata: Dict[str, Any], primary_area: str) -> float:
+    """벡터 검색에서 빠졌지만 metadata 필터로 확실히 맞는 후보의 내부 정렬용 거리값."""
+    category = str(metadata.get("resource_category") or metadata.get("filter_resource_category") or "")
+    name = str(metadata.get("resource_name") or "")
+    service_key = str(metadata.get("filter_service_type_ids") or metadata.get("existing_support_match_key") or "")
+    if primary_area == "복지경제":
+        if "지역교육복지센터" in category or "교육복지센터" in name:
+            return 0.35
+        if "행정복지센터" in category or "주민센터" in name:
+            return 0.48
+        if any(k in category + name + service_key for k in ["가족센터", "아동급식", "청소년방과후", "드림스타트"]):
+            return 0.50
+    if primary_area == "심리정서" and any(k in category + name for k in ["Wee", "상담", "정신건강"]):
+        return 0.38
+    if primary_area == "학업" and any(k in category + name for k in ["학습", "학력", "진단"]):
+        return 0.40
+    if primary_area == "진로" and any(k in category + name for k in ["진로", "꿈드림", "학교밖"]):
+        return 0.40
+    return 0.58
+
+
+def get_metadata_matched_resource_candidates(
+    client: Any,
+    target_areas: Any,
+    selected_school_level: str,
+    selected_school_district: str,
+    allowed_districts: List[str],
+    max_candidates: int = 80,
+) -> List[Dict[str, Any]]:
+    """벡터 검색 상위권에 못 오른 후보라도 metadata상 명확히 맞는 기관을 보강한다.
+
+    복합지원에서는 하나의 primary_area만 보지 않고 target_areas 전체를 통과 기준으로 사용한다.
+    예: 학업+심리정서+복지경제가 함께 확인되면 세 영역의 기관 후보를 모두 보강한다.
+    """
+    target_areas = normalize_target_areas(target_areas)
+    try:
+        collection = client.get_collection("resource_catalog")
+        got = collection.get(include=["documents", "metadatas"])
+    except Exception:
+        return []
+    ids = got.get("ids", []) or []
+    docs = got.get("documents", []) or []
+    metas = got.get("metadatas", []) or []
+    out: List[Dict[str, Any]] = []
+    for i, meta in enumerate(metas):
+        meta = meta or {}
+        if not metadata_support_matches(meta, target_areas):
+            continue
+        if not metadata_level_matches(meta, selected_school_level):
+            continue
+        if not metadata_district_matches(meta, allowed_districts):
+            continue
+        doc_id = ids[i] if i < len(ids) else f"metadata_match_{i}"
+        doc = docs[i] if i < len(docs) else ""
+        matched_areas = get_support_area_matches(meta, target_areas)
+        # 여러 영역과 맞는 경우 가장 낮은 pseudo distance를 사용한다.
+        pseudo_distances = [pseudo_distance_for_metadata_candidate(meta, area) for area in (matched_areas or target_areas or ["공통"])]
+        out.append({
+            "id": doc_id,
+            "document_text": doc,
+            "metadata": meta,
+            "distance": min(pseudo_distances) if pseudo_distances else 0.58,
+            "matched_query": f"[metadata 보강] {'|'.join(target_areas)} + {selected_school_district} + {selected_school_level}",
+            "collection": "resource_catalog",
+            "candidate_source": "metadata_filter_backfill",
+            "matched_support_areas": matched_areas,
+        })
+    def sort_key(item: Dict[str, Any]):
+        meta = item.get("metadata", {}) or {}
+        district = resolve_candidate_district(meta, allowed_districts)
+        category = str(meta.get("resource_category") or "")
+        name = str(meta.get("resource_name") or "")
+        same = 0 if district == selected_school_district else 1
+        cat_priority = 0
+        # 복지경제가 target에 포함된 경우 접근 가능한 복지 인프라를 조금 우선한다.
+        if "복지경제" in target_areas and ("지역교육복지센터" in category or "교육복지센터" in name):
+            cat_priority = -3
+        elif "복지경제" in target_areas and ("행정복지센터" in category or "주민센터" in name):
+            cat_priority = -2
+        elif any(area in target_areas for area in ["심리정서", "학업", "진로"]) and any(k in category + name for k in ["Wee", "상담", "학습", "진로", "꿈드림"]):
+            cat_priority = -1
+        return (same, cat_priority, float(item.get("distance") or 1.0), str(meta.get("resource_name") or ""))
+    return sorted(out, key=sort_key)[:max_candidates]
+
+
+def merge_resource_candidates(*candidate_lists: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """동일 기관 후보 중 더 좋은 거리값을 가진 항목을 유지한다."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    for candidates in candidate_lists:
+        for item in candidates or []:
+            meta = item.get("metadata", {}) or {}
+            name = str(meta.get("resource_name") or meta.get("기관명") or item.get("id") or "")
+            phone = str(meta.get("phone") or meta.get("전화번호") or meta.get("대표전화") or "")
+            address = str(meta.get("address") or meta.get("주소") or "")
+            key = f"{name}|{phone or address}"
+            if not key.strip("|"):
+                key = str(item.get("id"))
+            old = merged.get(key)
+            if old is None or float(item.get("distance") or 9) < float(old.get("distance") or 9):
+                merged[key] = item
+    return list(merged.values())
+
 def result_to_simple(item: Dict[str, Any]) -> Dict[str, Any]:
     meta = item.get("metadata", {}) or {}
     text = item.get("document_text", "") or ""
@@ -2040,28 +2317,46 @@ def result_to_simple(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def make_fallback_queries(analysis: Dict[str, Any]) -> List[Dict[str, str]]:
-    area = analysis.get("primary_area") or "공통"
-    signals = " ".join([str(s.get("signal", "")) for s in analysis.get("key_signals", [])[:2]])
-    return [
-        {"query": f"{area} 학생맞춤통합지원 통합지원 절차 {signals}", "target_collection": "policy_chunks", "purpose": "공식 지원 절차 근거 검색"},
-        {"query": f"{area} 지원서비스 상담 학습 진로 복지 {signals}", "target_collection": "service_catalog", "purpose": "서비스 유형 검색"},
-        {"query": f"{area} 상담 지원 지역기관 학생 {signals}", "target_collection": "resource_catalog", "purpose": "지역기관 후보 검색"},
-    ]
+def make_fallback_queries(analysis: Dict[str, Any], target_areas: Optional[List[str]] = None) -> List[Dict[str, str]]:
+    target_areas = normalize_target_areas(target_areas) or normalize_target_areas(analysis.get("primary_area")) or ["공통"]
+    signals = " ".join([str(s.get("signal", "")) for s in analysis.get("key_signals", [])[:3]])
+    queries: List[Dict[str, str]] = []
+    for area in target_areas:
+        queries.extend([
+            {"query": f"{area} 학생맞춤통합지원 통합지원 절차 {signals}", "target_collection": "policy_chunks", "purpose": f"{area} 공식 지원 절차 근거 검색"},
+            {"query": f"{area} 지원서비스 상담 학습 진로 복지 {signals}", "target_collection": "service_catalog", "purpose": f"{area} 서비스 유형 검색"},
+            {"query": f"{area} 상담 지원 지역기관 학생 {signals}", "target_collection": "resource_catalog", "purpose": f"{area} 지역기관 후보 검색"},
+        ])
+        if area == "복지경제":
+            queries.extend([
+                {"query": f"복지경제 지역교육복지센터 교육복지센터 사례관리 교육복지안전망 {signals}", "target_collection": "resource_catalog", "purpose": "복지경제 지역교육복지센터 후보 검색"},
+                {"query": f"복지경제 행정복지센터 동주민센터 복지급여 긴급지원 교육비 생계비 기초수급 차상위 {signals}", "target_collection": "resource_catalog", "purpose": "복지경제 행정복지센터 후보 검색"},
+            ])
+    # 중복 제거
+    seen = set()
+    unique: List[Dict[str, str]] = []
+    for q in queries:
+        key = (q.get("target_collection"), q.get("query"))
+        if key not in seen:
+            seen.add(key)
+            unique.append(q)
+    return unique
 
 
-def filter_resource_candidates(candidates: List[Dict[str, Any]], primary_area: str, selected_school_level: str, selected_school_district: str, allowed_districts: List[str], existing_support_info: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def filter_resource_candidates(candidates: List[Dict[str, Any]], target_areas: Any, selected_school_level: str, selected_school_district: str, allowed_districts: List[str], existing_support_info: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    target_areas = normalize_target_areas(target_areas)
     filtered: List[Dict[str, Any]] = []
     excluded: List[Dict[str, str]] = []
     for item in candidates:
         meta = item.get("metadata", {}) or {}
-        support_list = [normalize_area_name(x) for x in parse_pipe_list(meta.get("filter_support_area_list") or meta.get("support_area") or meta.get("linked_area"))]
-        support_pass = bool(primary_area in support_list or "공통" in support_list or not support_list)
+        support_list = extract_support_areas_from_metadata(meta)
+        matched_areas = get_support_area_matches(meta, target_areas)
+        support_pass = bool(matched_areas or "공통" in support_list or not support_list)
         level_list = [normalize_school_level(x) for x in parse_pipe_list(meta.get("filter_school_level_list") or meta.get("target_school_levels") or meta.get("target_school_level"))]
         selected_level = normalize_school_level(selected_school_level)
         level_pass = bool(not level_list or "전체" in level_list or "공통" in level_list or selected_level in level_list)
-        dist_list = parse_pipe_list(meta.get("filter_district_list") or meta.get("district") or meta.get("자치구"))
-        district = meta.get("district") or meta.get("자치구") or (dist_list[0] if dist_list else "")
+        dist_list = parse_pipe_list(meta.get("filter_district_list") or meta.get("districts_covered") or meta.get("district") or meta.get("자치구"))
+        district = resolve_candidate_district(meta, allowed_districts)
         district_pass = bool(is_common_or_wide_area_candidate(meta) or not allowed_districts or any(d in allowed_districts for d in dist_list) or district in allowed_districts)
         reasons = []
         if not support_pass:
@@ -2073,6 +2368,8 @@ def filter_resource_candidates(candidates: List[Dict[str, Any]], primary_area: s
         item["support_area_filter_pass"] = support_pass
         item["school_level_filter_pass"] = level_pass
         item["district_filter_pass"] = district_pass
+        item["matched_support_areas"] = matched_areas
+        item["target_support_areas"] = target_areas
         item["filter_pass"] = support_pass and level_pass and district_pass
         item["filter_exclusion_reason"] = ", ".join(reasons)
         name = meta.get("resource_name") or meta.get("기관명") or meta.get("name") or item.get("id")
@@ -2085,7 +2382,7 @@ def filter_resource_candidates(candidates: List[Dict[str, Any]], primary_area: s
             filtered.append(item)
         else:
             excluded.append({"resource_name": str(name), "reason": item["filter_exclusion_reason"]})
-    summary: Dict[str, Any] = {"total_candidates": len(candidates), "passed": len(filtered), "excluded": len(excluded), "excluded_samples": excluded[:30]}
+    summary: Dict[str, Any] = {"total_candidates": len(candidates), "passed": len(filtered), "excluded": len(excluded), "excluded_samples": excluded[:30], "target_areas": target_areas}
     for reason in ["지원 영역 불일치", "학교급 불일치", "지역 범위 밖"]:
         summary[reason] = sum(1 for x in excluded if reason in x.get("reason", ""))
     return filtered, summary
@@ -2112,7 +2409,7 @@ def format_distance_km(value: Any) -> str:
 
 def calculate_location_score(candidate: Dict[str, Any], selected_school_district: str, school_lat: Optional[float], school_lon: Optional[float], allowed_districts: List[str]) -> Tuple[float, Optional[float]]:
     meta = candidate.get("metadata", {}) or {}
-    district = meta.get("district") or meta.get("자치구") or ""
+    district = resolve_candidate_district(meta, allowed_districts)
     lat = get_first_coordinate_value(meta, ["latitude", "위도", "lat", "resource_latitude", "resource_lat", "기관위도", "기관_위도", "시설위도", "시설_위도", "center_latitude", "y", "Y"])
     lon = get_first_coordinate_value(meta, ["longitude", "경도", "lon", "lng", "resource_longitude", "resource_lon", "resource_lng", "기관경도", "기관_경도", "시설경도", "시설_경도", "center_longitude", "x", "X"])
     distance = None
@@ -2150,8 +2447,9 @@ def rank_resource_candidates(filtered_candidates: List[Dict[str, Any]], selected
         candidate = {
             "resource_name": name,
             "resource_category": meta.get("resource_category") or meta.get("service_type") or "-",
-            "support_area": normalize_area_name(meta.get("support_area") or meta.get("linked_area") or meta.get("filter_support_area_list") or "공통"),
-            "district": meta.get("district") or meta.get("자치구") or "",
+            "support_area": "|".join(item.get("matched_support_areas") or extract_support_areas_from_metadata(meta) or ["공통"]),
+            "matched_support_areas": item.get("matched_support_areas", []),
+            "district": resolve_candidate_district(meta, allowed_districts),
             "education_office": meta.get("education_office") or meta.get("교육지원청") or "",
             "address": address,
             "phone": phone,
@@ -2199,15 +2497,18 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
     adjacency = load_json_with_fallback(JSON_PATHS.get("district_adjacency", []))
     allowed_districts = get_allowed_districts(district, adjacency)
     existing = st.session_state.get("existing_support_info", "기존 지원 없음")
+    target_areas = derive_integrated_support_areas(analysis)
     queries = analysis.get("rag_search_queries") or []
+    fallback_queries = make_fallback_queries(analysis, target_areas)
     if not queries:
-        queries = make_fallback_queries(analysis)
-    if not any(q.get("target_collection") == "policy_chunks" for q in queries):
-        queries.extend([q for q in make_fallback_queries(analysis) if q["target_collection"] == "policy_chunks"])
-    if not any(q.get("target_collection") == "service_catalog" for q in queries):
-        queries.extend([q for q in make_fallback_queries(analysis) if q["target_collection"] == "service_catalog"])
-    if not any(q.get("target_collection") == "resource_catalog" for q in queries):
-        queries.extend([q for q in make_fallback_queries(analysis) if q["target_collection"] == "resource_catalog"])
+        queries = list(fallback_queries)
+    # LLM이 한 영역 위주 검색어만 만들더라도 복합 영역별 fallback query를 함께 추가한다.
+    existing_query_keys = {(q.get("target_collection"), q.get("query")) for q in queries}
+    for fq in fallback_queries:
+        key = (fq.get("target_collection"), fq.get("query"))
+        if key not in existing_query_keys:
+            queries.append(fq)
+            existing_query_keys.add(key)
 
     policy_items: List[Dict[str, Any]] = []
     service_items: List[Dict[str, Any]] = []
@@ -2224,8 +2525,13 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
                 resource_raw.extend(query_chroma_collection(client, "resource_catalog", query, n_results=50))
         except Exception as exc:
             st.warning(f"{collection} 검색 중 오류: {exc}")
-    primary_area = normalize_area_name(analysis.get("primary_area", "공통")) or "공통"
-    filtered, debug = filter_resource_candidates(resource_raw, primary_area, level, district, allowed_districts, existing)
+    primary_area = normalize_area_name(analysis.get("primary_area", "공통")) or (target_areas[0] if target_areas else "공통")
+    metadata_backfill = get_metadata_matched_resource_candidates(client, target_areas, level, district, allowed_districts, max_candidates=160)
+    resource_raw_merged = merge_resource_candidates(resource_raw, metadata_backfill)
+    filtered, debug = filter_resource_candidates(resource_raw_merged, target_areas, level, district, allowed_districts, existing)
+    debug["vector_candidate_count"] = len(resource_raw)
+    debug["metadata_backfill_candidate_count"] = len(metadata_backfill)
+    debug["merged_candidate_count"] = len(resource_raw_merged)
     ranked = rank_resource_candidates(filtered, school, allowed_districts)
     results = {
         "policy_evidence": policy_items[:8],
@@ -2234,6 +2540,8 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
         "filter_debug_summary": debug,
         "search_context": {
             "primary_area": primary_area,
+            "target_areas": target_areas,
+            "integrated_support_mode": True,
             "selected_school_district": district,
             "selected_school_level": normalize_school_level(level),
             "selected_school_latitude": get_first_coordinate_value(school, ["위도", "latitude", "lat", "school_latitude", "학교위도", "학교_위도", "y", "Y"]),
@@ -2242,6 +2550,9 @@ def run_rag_search() -> Optional[Dict[str, Any]]:
             "allowed_districts": allowed_districts,
             "existing_support_info": existing,
             "used_query_count": len(queries),
+            "vector_candidate_count": len(resource_raw),
+            "metadata_backfill_candidate_count": len(metadata_backfill),
+            "merged_candidate_count": len(resource_raw_merged),
         },
     }
     st.session_state["rag_search_results"] = results
@@ -2259,12 +2570,14 @@ def render_rag_search_section() -> None:
     school = st.session_state.get("selected_school_info", {})
     adjacency = load_json_with_fallback(JSON_PATHS.get("district_adjacency", []))
     allowed = get_allowed_districts(school.get("자치구", ""), adjacency)
+    target_areas_preview = derive_integrated_support_areas(analysis)
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(metric_card("우선 영역", analysis.get("primary_area", "-"), "상담 분석 결과"), unsafe_allow_html=True)
+    with c1: st.markdown(metric_card("검토 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), "복합지원 기준"), unsafe_allow_html=True)
     with c2: st.markdown(metric_card("학교 자치구", school.get("자치구", "-"), "지역 필터 기준"), unsafe_allow_html=True)
     with c3: st.markdown(metric_card("학교급", school.get("학교급", "-"), "대상 필터 기준"), unsafe_allow_html=True)
     with c4: st.markdown(metric_card("기존 지원", st.session_state.get("existing_support_info", "-"), "중복 지원 점검"), unsafe_allow_html=True)
     st.caption("인접 자치구: " + (", ".join(allowed[1:]) if len(allowed) > 1 else "정보 없음"))
+    st.caption("RAG는 우선 지원 영역 1개만이 아니라 상담 고려 영역·심층 유도 분석·상담 질문 생성 결과를 합쳐 여러 지원 영역을 함께 검색합니다.")
     school_lat = get_first_coordinate_value(school, ["위도", "latitude", "lat", "school_latitude", "학교위도", "학교_위도", "y", "Y"])
     school_lon = get_first_coordinate_value(school, ["경도", "longitude", "lon", "lng", "school_longitude", "학교경도", "학교_경도", "x", "X"])
     if school_lat is None or school_lon is None:
@@ -2327,6 +2640,7 @@ def build_resource_recommendation_payload(structured_counseling_analysis: Dict[s
         "service_catalog_results": rag_search_results.get("service_catalog_results", []),
         "ranked_resources": rag_search_results.get("ranked_resources", []),
         "search_context": rag_search_results.get("search_context", {}),
+        "target_areas": rag_search_results.get("search_context", {}).get("target_areas", []),
     }
 
 
@@ -2361,6 +2675,9 @@ recommended_resources의 rank와 resource_name은 ranked_resources에 있는 값
 
 [기존 지원 여부]
 {payload.get('existing_support_info')}
+
+[복합 검토 지원 영역]
+{_safe_json(payload.get('target_areas'))}
 
 [RAG 검색 결과: 공식 근거]
 {_safe_json(payload.get('policy_evidence'))}
@@ -2459,16 +2776,21 @@ def render_resource_recommendation_section() -> None:
                 st.session_state.get("existing_support_info", "기존 지원 없음"),
                 rag,
             )
-            with st.spinner("기관 추천 이유를 생성하고 있습니다..."):
-                result = call_llm_with_validation(
-                    build_resource_recommendation_system_prompt(),
-                    build_resource_recommendation_user_prompt(payload),
-                    validate_resource_recommendation_output,
-                    build_resource_recommendation_repair_prompt,
-                    validation_kwargs={"ranked_resources": rag.get("ranked_resources", []), "policy_evidence": rag.get("policy_evidence", [])},
-                )
+            payload_hash = stable_payload_hash(payload)
+            if use_cached_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash):
+                st.info("같은 RAG 후보로 이미 생성된 기관 추천 이유를 재사용합니다. API를 다시 호출하지 않았습니다.")
+                result = {"success": True, "data": st.session_state["resource_recommendation_explanation"], "warnings": []}
+            else:
+                with st.spinner("기관 추천 이유를 생성하고 있습니다..."):
+                    result = call_llm_with_validation(
+                        build_resource_recommendation_system_prompt(),
+                        build_resource_recommendation_user_prompt(payload),
+                        validate_resource_recommendation_output,
+                        build_resource_recommendation_repair_prompt,
+                        validation_kwargs={"ranked_resources": rag.get("ranked_resources", []), "policy_evidence": rag.get("policy_evidence", [])},
+                    )
             if result["success"]:
-                st.session_state["resource_recommendation_explanation"] = result["data"]
+                save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, result["data"])
                 st.success("기관 추천 이유 설명 생성이 완료되었습니다.")
                 if result.get("warnings"):
                     st.warning("검증 경고: " + " / ".join(map(str, result["warnings"][:3])))
@@ -2769,16 +3091,21 @@ def render_document_generation_section() -> None:
             rec = st.session_state.get("resource_recommendation_explanation", {})
             allowed_names = [r.get("resource_name") for r in rec.get("recommended_resources", [])]
             payload = build_document_generation_payload(st.session_state.get("structured_counseling_analysis", {}), rec, rag, st.session_state.get("first_check_result", {}), "meeting_record_and_student_growth_record")
-            with st.spinner("문서 서술형 내용을 생성하고 있습니다..."):
-                result = call_llm_with_validation(
-                    build_document_generation_system_prompt(),
-                    build_document_generation_user_prompt(payload),
-                    validate_document_generation_output,
-                    build_document_generation_repair_prompt,
-                    validation_kwargs={"allowed_resource_names": allowed_names},
-                )
+            payload_hash = stable_payload_hash(payload)
+            if use_cached_llm_result("generated_document_json", "generated_document_json_payload_hash", payload_hash):
+                st.info("같은 입력값으로 이미 생성된 문서 초안을 재사용합니다. API를 다시 호출하지 않았습니다.")
+                result = {"success": True, "data": st.session_state["generated_document_json"], "warnings": []}
+            else:
+                with st.spinner("문서 서술형 내용을 생성하고 있습니다..."):
+                    result = call_llm_with_validation(
+                        build_document_generation_system_prompt(),
+                        build_document_generation_user_prompt(payload),
+                        validate_document_generation_output,
+                        build_document_generation_repair_prompt,
+                        validation_kwargs={"allowed_resource_names": allowed_names},
+                    )
             if result["success"]:
-                st.session_state["generated_document_json"] = result["data"]
+                save_llm_result("generated_document_json", "generated_document_json_payload_hash", payload_hash, result["data"])
                 out_dir = APP_DIR / "outputs"
                 out_dir.mkdir(exist_ok=True)
                 generated_files = {}
@@ -3287,6 +3614,13 @@ def render_sidebar() -> str:
     st.sidebar.write(f"보건교사: {school.get('보건교사_수')}명")
     st.sidebar.write(f"진로상담실: {'있음' if school.get('진로상담실_있음') else '없음'}")
     st.sidebar.caption("학교 정보는 DB CSV에서 불러와 왼쪽 정보란에 표시합니다.")
+    st.sidebar.divider()
+    st.sidebar.markdown("### Gemini 호출 기록")
+    st.sidebar.write(f"이번 앱 세션 호출: {st.session_state.get('gemini_call_count_session', 0)}회")
+    if st.session_state.get('gemini_call_log_session'):
+        last_calls = st.session_state.get('gemini_call_log_session', [])[-5:]
+        st.sidebar.caption("최근 호출: " + " / ".join([f"{x.get('time')} {x.get('model')}" for x in last_calls]))
+    st.sidebar.caption("같은 입력값은 기존 결과를 재사용해 API 호출을 줄입니다.")
     return page
 
 # -----------------------------------------------------------------------------

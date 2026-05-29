@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 import streamlit as st
@@ -63,6 +64,55 @@ def extract_text_from_gemini_response(response: Any) -> str:
         return str(response)
 
 
+
+
+def _safe_session_get(key: str, default: Any = None) -> Any:
+    try:
+        return st.session_state.get(key, default)
+    except Exception:
+        return default
+
+
+def _safe_session_set(key: str, value: Any) -> None:
+    try:
+        st.session_state[key] = value
+    except Exception:
+        pass
+
+
+def _record_gemini_call(model: str) -> None:
+    """현재 Streamlit 세션에서 실제 Gemini API 호출 횟수를 기록한다.
+
+    Google 쪽 quota의 공식 카운터는 아니지만, 버튼 한 번에 몇 회 호출되는지
+    앱 내부에서 추적하기 위한 값이다.
+    """
+    count = int(_safe_session_get("gemini_call_count_session", 0) or 0) + 1
+    _safe_session_set("gemini_call_count_session", count)
+    log = list(_safe_session_get("gemini_call_log_session", []) or [])
+    log.append({"time": datetime.now().strftime("%H:%M:%S"), "model": model})
+    _safe_session_set("gemini_call_log_session", log[-30:])
+
+
+def _friendly_gemini_error(exc: Exception) -> str:
+    raw = str(exc)
+    if "RESOURCE_EXHAUSTED" in raw or "429" in raw:
+        retry = ""
+        m = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+)s", raw)
+        if m:
+            retry = f" 약 {m.group(1)}초 뒤 다시 시도할 수 있습니다."
+        return (
+            "Gemini API 사용량 제한에 걸렸습니다. "
+            "무료 등급에서는 RPM/RPD 제한이 낮고, 검증 실패 시 재호출이 추가로 발생할 수 있습니다."
+            + retry
+            + " 앱에서는 이번 요청 결과를 저장하지 않았습니다."
+        )
+    if "PERMISSION_DENIED" in raw or "403" in raw:
+        return "Gemini API 프로젝트 또는 API 키 접근 권한이 거부되었습니다. API 키가 속한 프로젝트와 결제/권한 설정을 확인해 주세요."
+    if "UNAVAILABLE" in raw or "503" in raw:
+        return "Gemini 모델 서버가 일시적으로 혼잡합니다. 잠시 후 다시 시도하거나 더 가벼운 모델을 사용해 주세요."
+    return raw
+
+
 def call_llm(system_prompt: str, user_prompt: str, response_schema: Any = None) -> str:
     api_key = get_gemini_api_key()
     if not api_key:
@@ -84,8 +134,11 @@ def call_llm(system_prompt: str, user_prompt: str, response_schema: Any = None) 
     if response_schema is not None:
         config_kwargs["response_schema"] = response_schema
 
+    model = get_gemini_model()
+    _record_gemini_call(model)
+
     response = client.models.generate_content(
-        model=get_gemini_model(),
+        model=model,
         contents=user_prompt,
         config=types.GenerateContentConfig(**config_kwargs),
     )
@@ -99,13 +152,13 @@ def call_llm_with_validation(
     repair_prompt_builder: Callable[[str, str], str],
     validation_kwargs: Optional[Dict[str, Any]] = None,
     response_schema: Any = None,
-    max_retry: int = 1,
+    max_retry: int = 0,
 ) -> Dict[str, Any]:
     validation_kwargs = validation_kwargs or {}
     try:
         output = call_llm(system_prompt, user_prompt, response_schema=response_schema)
     except Exception as exc:
-        return {"success": False, "data": None, "raw_output": "", "retried": False, "error": str(exc), "warnings": []}
+        return {"success": False, "data": None, "raw_output": "", "retried": False, "error": _friendly_gemini_error(exc), "warnings": []}
 
     validation = validate_func(output, **validation_kwargs)
     if validation.get("ok"):
@@ -134,7 +187,7 @@ def call_llm_with_validation(
                 "data": None,
                 "raw_output": previous_output,
                 "retried": retried,
-                "error": str(exc),
+                "error": _friendly_gemini_error(exc),
                 "warnings": warnings,
             }
         validation2 = validate_func(repaired, **validation_kwargs)
