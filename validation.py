@@ -26,50 +26,6 @@ def _contains_any(text: str, words: List[str]) -> List[str]:
     return [w for w in words if w and w in text]
 
 
-SANITIZE_REPLACEMENTS = [
-    ("가정에 문제가 있니", "집이나 생활에서 도움이 필요한 부분이 있나요"),
-    ("친구들과 문제가 있니", "친구들과 지내는 데 어려움이 있나요"),
-    ("가정에 문제가 있다", "가정 내 어려움을 확인할 필요가 있다"),
-    ("가정에 문제가 있습니다", "가정 내 어려움을 확인할 필요가 있습니다"),
-    ("문제가 있니", "어려움이 있나요"),
-    ("문제가 있다", "어려움이 관찰됩니다"),
-    ("문제가 있습니다", "어려움이 관찰됩니다"),
-    ("문제가 있는", "어려움이 확인되는"),
-    ("문제 학생", "지원 검토가 필요한 학생"),
-    ("위험 학생", "우선 확인이 필요한 학생"),
-    ("부적응 학생", "학교생활 적응 지원이 필요한 학생"),
-    ("비행 행동", "규칙 준수 관련 어려움"),
-    ("우울증이니", "마음이 많이 힘든 순간이 있나요"),
-    ("불안장애 있어", "불안하거나 부담되는 순간이 있나요"),
-    ("중독됐니", "사용 조절이 어렵게 느껴지는 부분이 있나요"),
-    ("우울증", "정서적 어려움"),
-    ("불안장애", "정서적 불안정"),
-    ("방임 상태", "돌봄 공백 가능성"),
-    ("학대 확정", "보호 필요 여부 확인"),
-    ("중독", "과의존"),
-    ("비정상", "추가 확인이 필요한 상태"),
-    ("반드시 연계", "연계 검토"),
-]
-
-
-def _sanitize_generated_text(text: Any) -> Any:
-    if not isinstance(text, str):
-        return text
-    out = text
-    for src, dst in SANITIZE_REPLACEMENTS:
-        out = out.replace(src, dst)
-    return out
-
-
-def sanitize_generated_data(data: Any) -> Any:
-    """사용자에게 보일 생성 결과에서 과도하게 단정적인 표현을 부드럽게 바꾼다."""
-    if isinstance(data, dict):
-        return {k: sanitize_generated_data(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [sanitize_generated_data(v) for v in data]
-    return _sanitize_generated_text(data)
-
-
 HARD_BANNED_COMMON = [
     "위험 학생", "문제 학생", "부적응 학생", "비행 행동", "우울증", "불안장애", "방임 상태",
     "학대 확정", "중독", "비정상", "반드시 연계", "문제가 있다", "가정에 문제가 있다",
@@ -91,11 +47,77 @@ SUPPORT_NEEDED_VALUES = ["현재 유지", "추가 관찰", "지원 검토 필요
 TARGET_COLLECTIONS = ["policy_chunks", "service_catalog", "resource_catalog"]
 
 
+SAFE_REPLACEMENTS = {
+    "위험 학생": "우선 지원 검토 학생",
+    "문제 학생": "지원 검토가 필요한 학생",
+    "부적응 학생": "학교생활 적응 지원이 필요한 학생",
+    "비행 행동": "생활지도상 확인이 필요한 행동",
+    "우울증이니": "마음이 많이 힘든 순간이 있나요",
+    "불안장애 있어": "불안하거나 부담스럽게 느끼는 순간이 있나요",
+    "우울증": "정서적 어려움",
+    "불안장애": "불안 관련 어려움",
+    "방임 상태": "돌봄 공백 가능성",
+    "학대 확정": "보호 관련 추가 확인 필요",
+    "중독됐니": "사용 조절이 어렵다고 느끼는 순간이 있나요",
+    "중독": "과의존 어려움",
+    "비정상": "평소와 다른 변화",
+    "반드시 연계": "연계 검토",
+    "가정에 문제가 있다": "가정 또는 생활 여건에서 어려움이 확인됩니다",
+    "문제가 있다": "어려움이 확인됩니다",
+    "방임당하고 있니": "생활에서 돌봄이나 도움이 부족하다고 느끼는 부분이 있나요",
+    "부모님이 너 괴롭히니": "집에서 지내며 부담스럽거나 힘든 상황이 있나요",
+    "왜 그랬니": "그 상황에서 어떤 마음이 들었는지 이야기해 줄 수 있나요",
+    "왜 안 하니": "하기 어려웠던 점이 있었는지 이야기해 줄 수 있나요",
+    "대체 생각이 뭐니": "그때 어떤 생각이 들었는지 궁금합니다",
+    "다른 애들은 잘하는데": "각자 상황이 다를 수 있으니",
+    "왜 너만 그러니": "어떤 부분이 특히 어렵게 느껴지는지",
+    "너 때문에 부모님이": "보호자와 함께 확인할 부분이",
+    "너 하나 때문에": "이 상황과 관련해",
+    "그건 별일 아니야": "그렇게 느낄 수 있습니다",
+    "네 나이 땐 다 겪는 일이야": "비슷한 어려움을 겪는 학생들도 있지만, 너의 상황을 더 듣고 싶습니다",
+    "시간 지나면 다 괜찮아져": "시간이 지나며 달라질 수 있지만 지금 필요한 도움을 함께 찾아보겠습니다",
+    "우울해하지 말고 웃어봐": "요즘 마음이 어떤지 편하게 이야기해 줄 수 있나요",
+    "관심받고 싶어서 그러는 거지": "그렇게 표현하게 된 이유가 있을 수 있습니다",
+    "선생님은 네가 왜 그러는지 다 알아": "선생님은 네 이야기를 더 듣고 싶습니다",
+    "아이고 불쌍해라": "많이 힘들었을 수 있겠습니다",
+    "말 안 하면 도와줄 수 없어": "말하기 어려운 부분은 천천히 이야기해도 괜찮습니다",
+    "계속 입 다물고 있으면": "지금 바로 말하기 어렵다면 나중에 다시 이야기해도 됩니다",
+    "부모님 모셔올 거야": "필요하면 보호자와 함께 확인하는 방법도 생각해 볼 수 있습니다",
+    "내 말대로만 하면 다 해결돼": "함께 방법을 찾아보겠습니다",
+    "친구들과 문제가 있니": "친구들과 지내며 어려운 점이 있나요",
+    "가정에 문제가 있니": "가정이나 생활에서 도움이 필요한 부분이 있나요",
+    "너는 왜 수업을 방해하니": "수업 시간에 힘들거나 불편한 점이 있나요",
+}
+
+
+def _sanitize_text_for_user_service(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    out = text
+    # 긴 표현을 먼저 바꿔서 부분 치환으로 어색해지는 것을 줄인다.
+    for bad in sorted(SAFE_REPLACEMENTS, key=len, reverse=True):
+        out = out.replace(bad, SAFE_REPLACEMENTS[bad])
+    return out
+
+
+def sanitize_llm_parsed_data(value: Any) -> Any:
+    """LLM 출력의 낙인·단정 표현을 사용자에게 보이기 전에 완화한다.
+
+    실제 서비스 화면에서는 생성형 AI의 표현상 실수를 기술 오류로 노출하지 않고,
+    안전한 표현으로 보정한 뒤 기존 검증을 통과시키는 것을 우선한다.
+    """
+    if isinstance(value, dict):
+        return {k: sanitize_llm_parsed_data(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_llm_parsed_data(v) for v in value]
+    return _sanitize_text_for_user_service(value)
+
+
 def validate_counseling_question_output(output_text: str, red_flag_result: Dict[str, Any], counseling_consideration_areas: List[Dict[str, Any]]) -> Dict[str, Any]:
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
-    parsed = sanitize_generated_data(parsed)
+    parsed = sanitize_llm_parsed_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     banned = _contains_any(text, QUESTION_HARD_BANNED)
     if banned:
@@ -128,7 +150,7 @@ def validate_counseling_analysis_output(output_text: str, teacher_counseling_not
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
-    parsed = sanitize_generated_data(parsed)
+    parsed = sanitize_llm_parsed_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_reasons", "urgent_notice", "긴급확인"]):
         return {"ok": False, "message": "상담 결과 분석 단계에는 urgent 또는 긴급확인 관련 필드를 포함하지 않습니다.", "parsed_data": None, "warnings": []}
@@ -209,7 +231,7 @@ def validate_resource_recommendation_output(output_text: str, ranked_resources: 
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
-    parsed = sanitize_generated_data(parsed)
+    parsed = sanitize_llm_parsed_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_notice", "urgent_reasons", "긴급확인"]):
         return {"ok": False, "message": "기관 추천 이유 단계에는 urgent 또는 긴급확인 관련 필드를 포함하지 않습니다.", "parsed_data": None, "warnings": []}
@@ -307,7 +329,7 @@ def validate_document_generation_output(output_text: str, allowed_resource_names
     parsed, err = _parse_json(output_text)
     if err:
         return {"ok": False, "message": err, "parsed_data": None, "warnings": []}
-    parsed = sanitize_generated_data(parsed)
+    parsed = sanitize_llm_parsed_data(parsed)
     text = json.dumps(parsed, ensure_ascii=False)
     if any(x in text for x in ["urgent_flag", "urgent_notice", "urgent_reasons", "긴급확인"]):
         return {"ok": False, "message": "회의록 생성 단계에는 urgent 또는 긴급확인 관련 내용을 포함하지 않습니다.", "parsed_data": None, "warnings": []}

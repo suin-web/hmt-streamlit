@@ -117,14 +117,6 @@ def _friendly_gemini_error(exc: Exception) -> str:
 
 
 
-def _friendly_validation_failure(message: str) -> str:
-    """LLM 출력 검증 실패 사유를 사용자에게 직접 노출하지 않기 위한 문구."""
-    return (
-        "생성된 내용을 학교 업무 표현 기준에 맞게 정리하지 못했습니다. "
-        "다시 생성해 주세요."
-    )
-
-
 def _get_int_setting(key: str, default: int) -> int:
     try:
         value = _secret_get(key)
@@ -206,7 +198,7 @@ def call_llm_with_validation(
     try:
         output = call_llm(system_prompt, user_prompt, response_schema=response_schema)
     except Exception as exc:
-        return {"success": False, "data": None, "raw_output": "", "retried": False, "error": _friendly_gemini_error(exc), "internal_error": str(exc), "warnings": []}
+        return {"success": False, "data": None, "raw_output": "", "retried": False, "error": _friendly_gemini_error(exc), "warnings": []}
 
     validation = validate_func(output, **validation_kwargs)
     if validation.get("ok"):
@@ -236,7 +228,6 @@ def call_llm_with_validation(
                 "raw_output": previous_output,
                 "retried": retried,
                 "error": _friendly_gemini_error(exc),
-                "internal_error": str(exc),
                 "warnings": warnings,
             }
         validation2 = validate_func(repaired, **validation_kwargs)
@@ -258,7 +249,6 @@ def call_llm_with_validation(
         "data": None,
         "raw_output": previous_output,
         "retried": retried,
-        "error": _friendly_validation_failure(str(last_error)),
-        "internal_error": str(last_error),
+        "error": last_error,
         "warnings": warnings,
     }

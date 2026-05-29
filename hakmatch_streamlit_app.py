@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import json
+import html
 import hashlib
 import math
 import os
@@ -40,11 +41,11 @@ import streamlit as st
 from gemini_client import call_llm_with_validation, get_gemini_api_key
 from validation import (
     HARD_BANNED_COMMON,
-    sanitize_generated_data,
     validate_counseling_question_output,
     validate_counseling_analysis_output,
     validate_resource_recommendation_output,
     validate_document_generation_output,
+    sanitize_llm_parsed_data,
 )
 
 try:
@@ -245,7 +246,7 @@ def inject_css() -> None:
             font-size: .82rem;
         }
         .page-title {
-            font-size: 1.35rem;
+            font-size: 1.18rem;
             font-weight: 900;
             color: #0f172a;
             margin: 0.3rem 0 0.2rem 0;
@@ -285,7 +286,7 @@ def inject_css() -> None:
             border-radius: 12px;
             padding: 16px 16px 14px 16px;
             box-shadow: 0 1px 3px rgba(15,23,42,0.05);
-            min-height: 112px;
+            min-height: 96px;
         }
         .metric-label {
             font-size: 0.82rem;
@@ -294,8 +295,9 @@ def inject_css() -> None:
             margin-bottom: 8px;
         }
         .metric-value {
-            font-size: 1.85rem;
-            line-height: 1.1;
+            font-size: 1.28rem;
+            line-height: 1.25;
+            word-break: keep-all;
             color: #0f172a;
             font-weight: 900;
         }
@@ -378,6 +380,66 @@ def inject_css() -> None:
             color: white;
             font-weight: 900;
             margin-right: 8px;
+        }
+        .question-text {
+            font-weight: 850;
+            font-size: 1rem;
+            line-height: 1.55;
+            color: #111827;
+            margin: 2px 0 10px 0;
+        }
+        .analysis-summary-card {
+            background: #ffffff;
+            border: 1px solid #dbe2ef;
+            border-radius: 12px;
+            padding: 18px 20px;
+            min-height: 150px;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.05);
+        }
+        .analysis-summary-label {
+            font-size: .9rem;
+            color: #64748b;
+            font-weight: 850;
+            margin-bottom: 8px;
+        }
+        .analysis-summary-status {
+            font-size: 1.42rem;
+            line-height: 1.25;
+            font-weight: 900;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }
+        .analysis-summary-text {
+            font-size: 1rem;
+            line-height: 1.7;
+            color: #334155;
+            word-break: keep-all;
+        }
+        .resource-title {
+            font-weight: 900;
+            color: #0f172a;
+            font-size: 1.05rem;
+            margin: 4px 0 10px 0;
+        }
+        .resource-detail-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .92rem;
+            margin-bottom: 8px;
+        }
+        .resource-detail-table th {
+            width: 150px;
+            background: #f8fafc;
+            color: #334155;
+            text-align: left;
+            padding: 9px 10px;
+            border: 1px solid #dbe2ef;
+        }
+        .resource-detail-table td {
+            padding: 9px 10px;
+            border: 1px solid #dbe2ef;
+            color: #0f172a;
+            line-height: 1.55;
         }
         .callout {
             padding: 12px 14px;
@@ -1258,11 +1320,54 @@ def render_page_title(title: str, subtitle: str) -> None:
 def metric_card(label: str, value: str, help_text: str = "") -> str:
     return f"""
     <div class="metric-card">
-        <div class="metric-label">{label}</div>
-        <div class="metric-value">{value}</div>
-        <div class="metric-help">{help_text}</div>
+        <div class="metric-label">{html.escape(str(label))}</div>
+        <div class="metric-value">{html.escape(str(value))}</div>
+        <div class="metric-help">{html.escape(str(help_text))}</div>
     </div>
     """
+
+
+def analysis_summary_card(status: str, summary_text: str) -> str:
+    return f"""
+    <div class="analysis-summary-card">
+        <div class="analysis-summary-label">지원 검토 안내</div>
+        <div class="analysis-summary-status">{html.escape(str(status or '-'))}</div>
+        <div class="analysis-summary-text">{html.escape(str(summary_text or '상담 결과를 바탕으로 추가 검토가 필요합니다.'))}</div>
+    </div>
+    """
+
+
+def resource_detail_table_html(rows: List[Tuple[str, Any]]) -> str:
+    body = []
+    for label, value in rows:
+        val = "-" if value is None or str(value).strip() == "" else str(value)
+        body.append(
+            f"<tr><th>{html.escape(str(label))}</th><td>{html.escape(val)}</td></tr>"
+        )
+    return "<table class='resource-detail-table'>" + "".join(body) + "</table>"
+
+
+
+
+def user_friendly_generation_error(error: Any, task_label: str) -> str:
+    """내부 검증 메시지를 실제 사용자에게 부드러운 안내문으로 바꾼다."""
+    err = str(error or "").strip()
+    if not err:
+        return f"{task_label} 처리 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    api_markers = [
+        "Gemini API 사용량", "무료 등급", "사용량 제한", "API 키", "접근 권한", "프로젝트", "모델 서버", "일시적으로 혼잡", "GEMINI_API_KEY",
+    ]
+    if any(m in err for m in api_markers):
+        return err
+    validation_markers = [
+        "금지 표현", "검증", "JSON", "필수", "허용 범위", "질문 개수", "recommended_questions", "support_needed", "primary_area", "decision_items",
+    ]
+    if any(m in err for m in validation_markers):
+        return (
+            f"{task_label} 결과를 정리하는 과정에서 일부 표현을 다시 다듬어야 합니다. "
+            "잠시 후 다시 시도하거나 입력 내용을 조금 더 구체적으로 작성해 주세요."
+        )
+    return f"{task_label} 처리 중 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
 
 def stage_badge(stage: str) -> str:
@@ -1716,7 +1821,7 @@ def render_counseling_question_section() -> None:
                 save_llm_result("generated_counseling_questions", "generated_counseling_questions_payload_hash", payload_hash, result["data"])
                 st.success("2차 상담 질문 생성이 완료되었습니다.")
             else:
-                render_user_friendly_generation_error("상담 질문 생성", result.get("error"))
+                st.warning(user_friendly_generation_error(result.get("error"), "상담 질문 생성"))
     data = st.session_state.get("generated_counseling_questions")
     if data:
         summary = data.get("counseling_focus_summary", "")
@@ -1724,22 +1829,19 @@ def render_counseling_question_section() -> None:
             st.markdown(f"<div class='callout'>{summary}</div>", unsafe_allow_html=True)
         for idx, q in enumerate(data.get("recommended_questions", []), start=1):
             qid = q.get("question_id") or f"Q{idx}"
-            st.markdown(
-                f"""
-                <div class="recommend-card">
-                    <div style="font-weight:900;font-size:1rem;">{qid}. {q.get('question', '')}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            with st.expander(f"{qid} 상세보기", expanded=False):
-                detail_rows = [
-                    {"항목": "질문 목적", "내용": q.get("purpose", "")},
-                    {"항목": "연결 영역", "내용": q.get("linked_area", "")},
-                    {"항목": "교사 유의사항", "내용": q.get("teacher_caution", "")},
-                    {"항목": "추가 확인", "내용": q.get("follow_up_if_needed", "")},
-                ]
-                st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
+            with st.container(border=True):
+                st.markdown(
+                    f"<div class='question-text'>{html.escape(str(qid))}. {html.escape(str(q.get('question', '')))}</div>",
+                    unsafe_allow_html=True,
+                )
+                with st.expander("상세보기", expanded=False):
+                    detail_rows = [
+                        {"항목": "질문 목적", "내용": q.get("purpose", "")},
+                        {"항목": "연결 영역", "내용": q.get("linked_area", "")},
+                        {"항목": "교사 유의사항", "내용": q.get("teacher_caution", "")},
+                        {"항목": "추가 확인", "내용": q.get("follow_up_if_needed", "")},
+                    ]
+                    st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------ 상담 결과 분석 ------------------------------
@@ -1895,15 +1997,15 @@ def render_counseling_analysis_section() -> None:
                 st.session_state["existing_support_info"] = existing
                 st.success("상담 결과 분석이 완료되었습니다.")
             else:
-                render_user_friendly_generation_error("상담 결과 분석", result.get("error"))
+                st.warning(user_friendly_generation_error(result.get("error"), "상담 결과 분석"))
     data = st.session_state.get("structured_counseling_analysis")
     if data:
         summ = data.get("analysis_summary", {})
         one_line = summ.get("support_needed_reason") or summ.get("one_sentence_summary") or "상담 결과를 바탕으로 추가 검토가 필요합니다."
         target_areas = derive_integrated_support_areas(data)
-        c1, c2 = st.columns([1.2, 1])
+        c1, c2 = st.columns([1.35, 1])
         with c1:
-            st.markdown(metric_card("지원 검토 안내", summ.get("support_needed", "-"), one_line), unsafe_allow_html=True)
+            st.markdown(analysis_summary_card(summ.get("support_needed", "-"), one_line), unsafe_allow_html=True)
         with c2:
             st.markdown(metric_card("복합 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), "함께 검토할 영역"), unsafe_allow_html=True)
         st.caption("AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 돕는 참고자료입니다.")
@@ -1915,22 +2017,6 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-
 
 
 
-
-
-
-def render_user_friendly_generation_error(task_name: str, error: Any = None) -> None:
-    """내부 검증 실패 사유를 사용자에게 직접 노출하지 않고 안내한다."""
-    msg = str(error or "")
-    # API/서버 상태는 사용자가 취할 수 있는 행동이 있어 간단히 안내하고,
-    # 금지표현·JSON·필드명 같은 내부 검증 사유는 숨긴다.
-    if "사용량 제한" in msg or "무료 등급" in msg:
-        st.warning(f"{task_name}을(를) 잠시 중단했습니다. 오늘의 AI 생성 사용량이 많습니다. 잠시 후 다시 시도하거나 기존 생성 결과를 사용해 주세요.")
-    elif "일시적으로 혼잡" in msg or "서버" in msg:
-        st.warning(f"{task_name}을(를) 잠시 완료하지 못했습니다. AI 생성 서비스가 일시적으로 혼잡합니다. 잠시 후 다시 시도해 주세요.")
-    elif "API 키" in msg or "접근 권한" in msg:
-        st.warning(f"{task_name}을(를) 실행할 수 없습니다. 관리자에게 AI 생성 기능 설정 확인을 요청해 주세요.")
-    else:
-        st.warning(f"{task_name}을(를) 완성하지 못했습니다. 생성된 내용을 업무 표현 기준에 맞게 정리하지 못했습니다. 다시 시도해 주세요.")
 
 def stable_payload_hash(payload: Any) -> str:
     """동일 입력값에 대해 API 재호출을 막기 위한 안정적인 해시."""
@@ -2602,7 +2688,7 @@ def generate_resource_recommendation_for_results(rag: Dict[str, Any]) -> Optiona
     if result.get("success"):
         save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, result["data"])
         return result["data"]
-    render_user_friendly_generation_error("추천 이유 생성", result.get("error"))
+    st.warning(user_friendly_generation_error(result.get("error"), "지원기관 추천 이유 생성") + " 기관 후보는 먼저 표시합니다.")
     return None
 
 
@@ -2687,7 +2773,7 @@ def render_rag_search_section() -> None:
                     if rec_result["success"]:
                         save_llm_result("resource_recommendation_explanation", "resource_recommendation_explanation_payload_hash", payload_hash, rec_result["data"])
                     else:
-                        render_user_friendly_generation_error("추천 이유 생성", rec_result.get("error"))
+                        st.warning(user_friendly_generation_error(rec_result.get("error"), "추천 이유 생성") + " 기관 후보는 먼저 표시합니다.")
             elif results and not get_gemini_api_key():
                 st.warning("API 키가 설정되어 있지 않아 추천 이유는 표시하지 않습니다.")
 
@@ -2698,23 +2784,25 @@ def render_rag_search_section() -> None:
             st.warning("현재 조건에서 바로 제시할 수 있는 기관 후보가 부족합니다. 보조 영역 검토 또는 지역 범위 확장이 필요할 수 있습니다.")
         else:
             reason_map = _resource_reason_map()
-            rows = []
             for r in resources:
                 name = normalize_text(r.get("resource_name"))
-                rows.append({
-                    "순위": r.get("rank"),
-                    "기관명": name,
-                    "기관유형": r.get("resource_category"),
-                    "지원 영역": ", ".join(r.get("matched_support_areas", []) or normalize_area_list(r.get("support_area"))) or r.get("support_area"),
-                    "자치구": r.get("district"),
-                    "거리": format_distance_km(r.get("distance_km")),
-                    "주소": r.get("address"),
-                    "전화번호": r.get("phone"),
-                    "홈페이지": r.get("homepage"),
-                    "기존 지원 상태": r.get("existing_support_status"),
-                    "추천 이유": reason_map.get(re.sub(r"\s+", "", name), ""),
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                support_area = ", ".join(r.get("matched_support_areas", []) or normalize_area_list(r.get("support_area"))) or r.get("support_area")
+                reason = reason_map.get(re.sub(r"\s+", "", name), "")
+                with st.container(border=True):
+                    rank = r.get("rank", "-")
+                    st.markdown(f"<div class='resource-title'>{html.escape(str(rank))}순위. {html.escape(str(name))}</div>", unsafe_allow_html=True)
+                    rows = [
+                        ("기관유형", r.get("resource_category")),
+                        ("지원 영역", support_area),
+                        ("자치구", r.get("district")),
+                        ("거리", format_distance_km(r.get("distance_km"))),
+                        ("주소", r.get("address")),
+                        ("전화번호", r.get("phone")),
+                        ("홈페이지", r.get("homepage")),
+                        ("기존 지원 상태", r.get("existing_support_status")),
+                        ("추천 이유", reason or "상담 결과와 학교·지역 여건을 바탕으로 검토할 수 있는 지원기관입니다."),
+                    ]
+                    st.markdown(resource_detail_table_html(rows), unsafe_allow_html=True)
             st.caption("추천기관은 교사와 학교 협의체가 검토할 후보입니다. 실제 연계 전 기관 운영 여부와 보호자 동의 여부를 확인해 주세요.")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2932,7 +3020,7 @@ def validate_meeting_generation_output(output_text: str, allowed_resource_names:
         return {"ok": False, "message": f"JSON 형식이 올바르지 않습니다: {exc}", "parsed_data": None, "warnings": []}
     if not isinstance(data, dict):
         return {"ok": False, "message": "출력은 JSON 객체여야 합니다.", "parsed_data": None, "warnings": []}
-    data = sanitize_generated_data(data)
+    data = sanitize_llm_parsed_data(data)
     mr = data.get("meeting_record")
     if not isinstance(mr, dict):
         return {"ok": False, "message": "meeting_record가 필요합니다.", "parsed_data": None, "warnings": []}
@@ -3061,7 +3149,7 @@ def render_document_generation_section() -> None:
                     fill_meeting_docx(tpl, out, meeting_basic, result["data"])
                     ok, msg = validate_generated_docx(out)
                     if not ok:
-                        st.warning("회의록 서식 확인이 필요합니다. 다운로드 후 내용을 확인해 주세요.")
+                        st.warning("회의록 확인 필요: " + msg)
                     generated_files["meeting"] = out
                     st.session_state["generated_docx_files"] = {k: str(v) for k, v in generated_files.items()}
                     st.success("회의록 생성이 완료되었습니다.")
@@ -3074,7 +3162,7 @@ def render_document_generation_section() -> None:
                         for item in mr.get("support_plan", mr.get("decision_items", [])):
                             st.write("- " + str(item))
             else:
-                render_user_friendly_generation_error("회의록 생성", result.get("error"))
+                st.warning(user_friendly_generation_error(result.get("error"), "회의록 생성"))
     files = st.session_state.get("generated_docx_files", {})
     if files.get("meeting") and Path(files["meeting"]).exists():
         st.download_button("회의록 DOCX 다운로드", Path(files["meeting"]).read_bytes(), Path(files["meeting"]).name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
@@ -3400,13 +3488,11 @@ def page_status_table() -> None:
     table = make_status_table(df)
     st.dataframe(table, use_container_width=True, hide_index=True)
 
-    col1, col2, col3 = st.columns([1, 1, 2])
+    col1, col2 = st.columns(2)
     with col1:
         st.download_button("CSV 다운로드", data=table.to_csv(index=False).encode("utf-8-sig"), file_name="학생맞춤통합지원_지원현황표.csv", mime="text/csv", use_container_width=True)
     with col2:
         st.download_button("Excel 다운로드", data=to_excel_bytes(table), file_name="학생맞춤통합지원_지원현황표.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-    with col3:
-        st.info("실제 제출·시연에서는 학생 실명 대신 학생코드만 사용하세요.")
 
 
 # -----------------------------------------------------------------------------
