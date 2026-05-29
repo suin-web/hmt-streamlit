@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import io
+import copy
 import json
 import html
 import hashlib
@@ -1897,19 +1898,16 @@ def build_counseling_question_repair_prompt(validation_error: str, previous_outp
 
 
 def render_counseling_question_section() -> None:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     first_check_result = st.session_state.get("first_check_result")
     red_flag_result = st.session_state.get("red_flag_result", {"urgent_flag": False, "urgent_flag_items": []})
     active_deep_rules = st.session_state.get("active_deep_rules", [])
     counseling_areas = st.session_state.get("counseling_consideration_areas", [])
     if not first_check_result or not counseling_areas:
         st.info("체크리스트 결과 계산 후 상담 질문을 만들 수 있습니다.")
-        st.markdown("</div>", unsafe_allow_html=True)
         return
     official_df, err = load_official_checklist_reference()
     if err:
         st.warning("상담 질문 생성을 위한 참고 자료를 읽지 못했습니다.")
-        st.markdown("</div>", unsafe_allow_html=True)
         return
     official_context = get_official_checklist_context(official_df, counseling_areas, red_flag_result)
     st.session_state["official_checklist_context"] = official_context
@@ -1971,7 +1969,6 @@ def render_counseling_question_section() -> None:
                         {"항목": "추가 확인", "내용": q.get("follow_up_if_needed", "")},
                     ]
                     st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------ 상담 결과 분석 ------------------------------
 def build_counseling_analysis_payload(
@@ -2080,7 +2077,6 @@ def build_counseling_analysis_repair_prompt(validation_error: str, previous_outp
 
 
 def render_counseling_analysis_section() -> None:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     st.write("학생과 2차 상담을 진행한 뒤, 상담 결과를 간단히 기록하면 지원 검토 방향을 정리합니다.")
     note = st.text_area(
         "2차 상담 결과 메모",
@@ -2157,7 +2153,6 @@ def render_counseling_analysis_section() -> None:
         with c2:
             st.markdown(metric_card("상담에서 확인된 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), secondary_help), unsafe_allow_html=True)
         st.caption("AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 돕는 참고자료입니다.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ------------------------------ 맞춤 검색 ------------------------------
@@ -3062,12 +3057,10 @@ def _resource_reason_map() -> Dict[str, str]:
 
 
 def render_rag_search_section() -> None:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     st.write("상담 결과 분석을 바탕으로 학교 상황과 지역 여건에 맞는 지원기관 후보를 추천합니다.")
     analysis = st.session_state.get("structured_counseling_analysis")
     if not analysis:
         st.info("2차 상담 결과 분석이 완료되면 지원기관을 추천할 수 있습니다.")
-        st.markdown("</div>", unsafe_allow_html=True)
         return
     school = st.session_state.get("selected_school_info", {})
     adjacency = load_json_with_fallback(JSON_PATHS.get("district_adjacency", []))
@@ -3145,7 +3138,6 @@ def render_rag_search_section() -> None:
                     ]
                     st.markdown(resource_detail_table_html(rows), unsafe_allow_html=True)
             st.caption("추천기관은 교사와 학교 협의체가 검토할 후보입니다. 실제 연계 전 기관 운영 여부와 보호자 동의 여부를 확인해 주세요.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------ 기관 추천 이유 생성 ------------------------------
 def build_resource_recommendation_payload(structured_counseling_analysis: Dict[str, Any], first_check_result: Dict[str, Any], context_result: Dict[str, Any], existing_support_info: str, rag_search_results: Dict[str, Any]) -> Dict[str, Any]:
@@ -3292,6 +3284,8 @@ def build_document_generation_system_prompt() -> str:
 학생을 진단하거나 판정하지 않는다. 교사의 최종 판단을 대체하지 않는다.
 제공된 자료에 없는 사실, 기관명, 연락처, 주소, 제도명을 새로 만들지 않는다.
 개인정보를 생성하거나 추정하지 않는다. Red Flag, urgent_flag, 긴급확인 관련 표현은 사용하지 않는다.
+회의록 문체는 명사형 종결어미로 작성한다. 예: "확인함", "검토함", "연계 예정임", "추가 관찰 필요함".
+"~합니다", "~했습니다", "~것입니다"처럼 설명문 형식의 종결은 사용하지 않는다.
 출력은 반드시 지정된 JSON 형식으로만 작성한다.
 """.strip()
 
@@ -3300,6 +3294,9 @@ def build_document_generation_user_prompt(payload: Dict[str, Any]) -> str:
 아래 자료를 바탕으로 통합지원팀 회의록에 들어갈 서술형 내용을 JSON으로 작성하라.
 개인정보는 제공하지 않는다. 학생명, 생년월일, 연락처, 주소는 생성하지 않는다.
 기관명은 제공된 추천기관 안에서만 사용한다.
+회의록에 들어갈 문장은 명사형 종결어미로 마무리한다.
+예: "상담 메모에서 진로 관심 저하와 또래관계 소극성이 확인됨", "위클래스 상담 경과 확인 후 추가 연계 검토함".
+"~합니다", "~했습니다", "~필요합니다" 형식은 사용하지 말고 "~함", "~확인됨", "~필요함"으로 작성한다.
 
 [문서 생성 대상]
 {payload.get('document_type')}
@@ -3333,6 +3330,7 @@ def build_document_generation_user_prompt(payload: Dict[str, Any]) -> str:
 주의:
 - support_plan에는 기존 버전의 결정사항에 들어가던 지원 실행 계획을 작성한다.
 - decision_items는 반드시 빈 리스트 []로 둔다. 최종 결정사항은 회의 후 교사가 직접 작성한다.
+- agenda, meeting_content, support_plan의 각 문장은 회의록 문체에 맞게 명사형 종결어미로 끝낸다.
 """.strip()
 
 def build_document_generation_repair_prompt(validation_error: str, previous_output: str) -> str:
@@ -3348,6 +3346,8 @@ def build_document_generation_repair_prompt(validation_error: str, previous_outp
 6. 개인정보를 생성하거나 추정하지 말 것
 7. 학생을 진단하거나 낙인찍는 표현을 쓰지 말 것
 8. Red Flag, urgent_flag, 긴급확인 관련 내용은 출력하지 말 것
+9. 회의록 문장은 명사형 종결어미로 끝낼 것. 예: 확인함, 검토함, 연계 예정임, 추가 관찰 필요함
+10. ~합니다, ~했습니다, ~필요합니다 형식은 사용하지 말 것
 
 [이전 출력]
 {previous_output}
@@ -3386,6 +3386,82 @@ def strip_json_code_fence_local(text: str) -> str:
     m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", t, flags=re.IGNORECASE | re.DOTALL)
     return m.group(1).strip() if m else t
 
+
+def _nominalize_korean_sentence(sentence: str) -> str:
+    """회의록용 문장을 가능한 범위에서 명사형 종결로 정리한다."""
+    text = normalize_text(sentence).strip()
+    if not text:
+        return text
+    prefix = ""
+    m = re.match(r"^(\s*[-•·]\s*)(.*)$", text)
+    if m:
+        prefix, text = m.group(1), m.group(2).strip()
+    end_punct = "." if text.endswith(".") else ""
+    text_core = text[:-1].strip() if end_punct else text
+
+    replacements = [
+        ("필요합니다", "필요함"),
+        ("필요합니다", "필요함"),
+        ("필요가 있습니다", "필요함"),
+        ("필요가 있음", "필요함"),
+        ("권장합니다", "권장함"),
+        ("권장됩니다", "권장됨"),
+        ("검토합니다", "검토함"),
+        ("검토됩니다", "검토됨"),
+        ("확인합니다", "확인함"),
+        ("확인됩니다", "확인됨"),
+        ("진행합니다", "진행함"),
+        ("진행됩니다", "진행됨"),
+        ("연계합니다", "연계함"),
+        ("연계됩니다", "연계됨"),
+        ("계획합니다", "계획함"),
+        ("수립합니다", "수립함"),
+        ("안내합니다", "안내함"),
+        ("관찰됩니다", "관찰됨"),
+        ("나타납니다", "나타남"),
+        ("보입니다", "보임"),
+        ("예정입니다", "예정임"),
+        ("예정입니다", "예정임"),
+        ("되었습니다", "됨"),
+        ("됩니다", "됨"),
+        ("있습니다", "있음"),
+        ("없습니다", "없음"),
+        ("하였습니다", "함"),
+        ("했습니다", "함"),
+        ("합니다", "함"),
+    ]
+    for old, new in replacements:
+        if text_core.endswith(old):
+            text_core = text_core[: -len(old)] + new
+            break
+    # 너무 설명문처럼 끝나는 경우 중 일부를 회의록 문체로 정리
+    text_core = text_core.replace("할 수 있습니다", "할 수 있음").replace("할 수 있음음", "할 수 있음")
+    return prefix + text_core + end_punct
+
+
+def nominalize_meeting_text(value: Any) -> Any:
+    if isinstance(value, list):
+        return [nominalize_meeting_text(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    lines = value.splitlines()
+    converted = []
+    for line in lines:
+        parts = re.split(r"(?<=\.)\s+", line.strip()) if line.strip() else [line]
+        converted.append(" ".join(_nominalize_korean_sentence(part) for part in parts if part != ""))
+    return "\n".join(converted)
+
+
+def normalize_meeting_record_nominal_style(data: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = copy.deepcopy(data or {})
+    mr = cleaned.setdefault("meeting_record", {})
+    for key in ["agenda", "meeting_content", "support_plan"]:
+        if key in mr:
+            mr[key] = nominalize_meeting_text(mr.get(key))
+    # 최종 결정사항은 회의 후 교사가 작성하도록 항상 비워 둔다.
+    mr["decision_items"] = []
+    return cleaned
+
 def _set_cell_text(cell: Any, text: str) -> None:
     cell.text = str(text or "")
 
@@ -3399,6 +3475,7 @@ def _join_list(values: Any) -> str:
 def fill_meeting_docx(template_path: Path, output_path: Path, basic: Dict[str, Any], llm_result: Dict[str, Any]) -> None:
     from docx import Document
     import shutil
+    llm_result = normalize_meeting_record_nominal_style(llm_result)
     shutil.copyfile(template_path, output_path)
     doc = Document(str(output_path))
     mr = llm_result.get("meeting_record", {})
@@ -3438,10 +3515,8 @@ def validate_generated_docx(path: Path) -> Tuple[bool, str]:
 
 
 def render_document_generation_section() -> None:
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     if not st.session_state.get("structured_counseling_analysis") or not st.session_state.get("resource_recommendation_explanation"):
         st.info("상담 결과 분석과 지원기관 검색이 완료되면 회의록을 생성할 수 있습니다.")
-        st.markdown("</div>", unsafe_allow_html=True)
         return
     st.write("회의록 기본정보")
     c1, c2, c3 = st.columns(3)
@@ -3477,6 +3552,7 @@ def render_document_generation_section() -> None:
                         validation_kwargs={"allowed_resource_names": allowed_names},
                     )
             if result["success"]:
+                result["data"] = normalize_meeting_record_nominal_style(result["data"])
                 save_llm_result("generated_document_json", "generated_document_json_payload_hash", payload_hash, result["data"])
                 out_dir = APP_DIR / "outputs"
                 out_dir.mkdir(exist_ok=True)
@@ -3507,7 +3583,6 @@ def render_document_generation_section() -> None:
     files = st.session_state.get("generated_docx_files", {})
     if files.get("meeting") and Path(files["meeting"]).exists():
         st.download_button("회의록 DOCX 다운로드", Path(files["meeting"]).read_bytes(), Path(files["meeting"]).name, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
 def render_followup_workflow_sections() -> None:
     # 각 단계는 이전 단계가 완료된 뒤에만 표시해 실제 사용자가 한 번에 과도한 정보를 보지 않도록 한다.
@@ -3651,10 +3726,8 @@ def page_first_checklist() -> None:
     selected_student = selected_label.split(" | ")[0]
 
     render_workflow_section_header("1", "1차 체크리스트", "학생의 학교생활에서 관찰된 신호를 입력합니다.")
-    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     responses = render_checklist_input(items_df, selected_student)
     calc_clicked = st.button("체크리스트 결과 계산", type="primary", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     if not responses:
         return
