@@ -6,7 +6,7 @@
     streamlit run hakmatch_streamlit_app.py
 
 이번 버전 반영 사항:
-- 접속 첫 화면: 담임교사 대시보드
+- 접속 첫 화면: 교사 대시보드
 - 상단 역할 전환: 담임교사 / 학생맞춤통합지원담당교원
 - 담임교사: 본인 반 학생만 조회
 - 학생맞춤통합지원담당교원: 전교 학생 상태 조회
@@ -1897,7 +1897,7 @@ def build_counseling_question_repair_prompt(validation_error: str, previous_outp
 
 
 def render_counseling_question_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>AI 2차 상담 질문 추천</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     first_check_result = st.session_state.get("first_check_result")
     red_flag_result = st.session_state.get("red_flag_result", {"urgent_flag": False, "urgent_flag_items": []})
     active_deep_rules = st.session_state.get("active_deep_rules", [])
@@ -1924,6 +1924,7 @@ def render_counseling_question_section() -> None:
         if not get_gemini_api_key():
             st.warning("API 키가 설정되지 않아 상담 질문 생성을 실행할 수 없습니다.")
         else:
+            clear_pipeline_from("questions_downstream")
             payload = {
                 "first_check_result": first_check_result,
                 "red_flag_result": red_flag_result,
@@ -2079,7 +2080,7 @@ def build_counseling_analysis_repair_prompt(validation_error: str, previous_outp
 
 
 def render_counseling_analysis_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>2차 상담 결과 분석</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     st.write("학생과 2차 상담을 진행한 뒤, 상담 결과를 간단히 기록하면 지원 검토 방향을 정리합니다.")
     note = st.text_area(
         "2차 상담 결과 메모",
@@ -2093,6 +2094,10 @@ def render_counseling_analysis_section() -> None:
         judgment = st.selectbox("교사의 지원 필요 판단", ["현재 유지", "추가 관찰", "지원 검토 필요", "판단 보류"], index=2, key="teacher_support_judgment_input")
     with col2:
         existing = st.text_input("기존 지원 여부", value=st.session_state.get("existing_support_info", "기존 지원 없음"), placeholder="예: 기존 지원 없음 / 현재 Wee클래스 상담 중 / 확인 필요")
+    analysis_dirty = counseling_analysis_input_changed(note, judgment, existing)
+    if analysis_dirty:
+        clear_pipeline_from("analysis")
+        st.info("상담 메모 또는 입력값이 변경되었습니다. 다시 분석하면 이후 단계가 새 결과에 맞춰 열립니다.")
     if not get_gemini_api_key():
         st.warning("Gemini API 키가 설정되어 있지 않습니다. Streamlit secrets 또는 환경변수에 GEMINI_API_KEY를 설정해 주세요.")
     if st.button("상담 결과 분석하기", type="primary", use_container_width=True, key="btn_analyze_note"):
@@ -2105,6 +2110,7 @@ def render_counseling_analysis_section() -> None:
         elif not get_gemini_api_key():
             st.warning("API 키가 설정되지 않아 상담 결과 분석을 실행할 수 없습니다.")
         else:
+            clear_pipeline_from("analysis_downstream")
             payload = build_counseling_analysis_payload(
                 st.session_state["first_check_result"],
                 st.session_state.get("active_deep_rules", []),
@@ -2176,6 +2182,121 @@ def use_cached_llm_result(result_key: str, hash_key: str, payload_hash: str) -> 
 def save_llm_result(result_key: str, hash_key: str, payload_hash: str, data: Any) -> None:
     st.session_state[result_key] = data
     st.session_state[hash_key] = payload_hash
+
+
+PIPELINE_STATE_KEYS = {
+    "checklist": [
+        "first_check_result",
+        "red_flag_result",
+        "context_result",
+        "active_deep_rules",
+        "counseling_consideration_areas",
+        "last_payload",
+        "last_checklist_student",
+        "official_checklist_context",
+        "generated_counseling_questions",
+        "structured_counseling_analysis",
+        "rag_search_results",
+        "resource_recommendation_explanation",
+        "generated_document_json",
+        "generated_docx_files",
+        "generated_counseling_questions_payload_hash",
+        "structured_counseling_analysis_payload_hash",
+        "resource_recommendation_explanation_payload_hash",
+        "generated_document_json_payload_hash",
+    ],
+    # 1차 체크리스트를 다시 계산했을 때 2차 상담 이후 결과까지 모두 정리한다.
+    "questions": [
+        "official_checklist_context",
+        "generated_counseling_questions",
+        "generated_counseling_questions_payload_hash",
+        "structured_counseling_analysis",
+        "rag_search_results",
+        "resource_recommendation_explanation",
+        "generated_document_json",
+        "generated_docx_files",
+        "structured_counseling_analysis_payload_hash",
+        "resource_recommendation_explanation_payload_hash",
+        "generated_document_json_payload_hash",
+    ],
+    # 상담 질문을 다시 생성했을 때는 기존 질문은 재사용할 수 있게 두고 이후 결과만 정리한다.
+    "questions_downstream": [
+        "structured_counseling_analysis",
+        "rag_search_results",
+        "resource_recommendation_explanation",
+        "generated_document_json",
+        "generated_docx_files",
+        "structured_counseling_analysis_payload_hash",
+        "resource_recommendation_explanation_payload_hash",
+        "generated_document_json_payload_hash",
+    ],
+    # 상담 메모 입력값 자체가 바뀐 경우에는 분석 결과부터 다시 만든다.
+    "analysis": [
+        "structured_counseling_analysis",
+        "rag_search_results",
+        "resource_recommendation_explanation",
+        "generated_document_json",
+        "generated_docx_files",
+        "structured_counseling_analysis_payload_hash",
+        "resource_recommendation_explanation_payload_hash",
+        "generated_document_json_payload_hash",
+    ],
+    # 상담 결과 분석 버튼을 다시 누른 경우, 분석 결과 캐시는 남겨도 이후 추천/문서는 새로 열리게 한다.
+    "analysis_downstream": [
+        "rag_search_results",
+        "resource_recommendation_explanation",
+        "generated_document_json",
+        "generated_docx_files",
+        "resource_recommendation_explanation_payload_hash",
+        "generated_document_json_payload_hash",
+    ],
+    "recommendation": [
+        "rag_search_results",
+        "resource_recommendation_explanation",
+        "generated_document_json",
+        "generated_docx_files",
+        "resource_recommendation_explanation_payload_hash",
+        "generated_document_json_payload_hash",
+    ],
+    "document": [
+        "generated_document_json",
+        "generated_docx_files",
+        "generated_document_json_payload_hash",
+    ],
+}
+
+
+def clear_pipeline_from(stage: str) -> None:
+    """이전 단계가 바뀌었을 때 이후 단계 결과를 정리한다."""
+    for key in PIPELINE_STATE_KEYS.get(stage, []):
+        st.session_state.pop(key, None)
+
+
+def normalize_response_values(responses: Dict[str, Any]) -> Dict[str, int]:
+    normalized: Dict[str, int] = {}
+    for key, value in (responses or {}).items():
+        try:
+            normalized[str(key)] = int(value)
+        except Exception:
+            normalized[str(key)] = 0
+    return normalized
+
+
+def checklist_input_changed(selected_student: str, responses: Dict[str, Any]) -> bool:
+    stored = st.session_state.get("checklist_responses", {}).get(selected_student)
+    if stored is None:
+        return False
+    return normalize_response_values(stored) != normalize_response_values(responses)
+
+
+def counseling_analysis_input_changed(note: str, judgment: str, existing: str) -> bool:
+    if not st.session_state.get("structured_counseling_analysis"):
+        return False
+    return (
+        normalize_text(note) != normalize_text(st.session_state.get("teacher_counseling_note", ""))
+        or normalize_text(judgment) != normalize_text(st.session_state.get("teacher_support_judgment", ""))
+        or normalize_text(existing) != normalize_text(st.session_state.get("existing_support_info", ""))
+    )
 
 
 def parse_pipe_list(value: Any) -> List[str]:
@@ -2941,7 +3062,7 @@ def _resource_reason_map() -> Dict[str, str]:
 
 
 def render_rag_search_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>지원기관 추천</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     st.write("상담 결과 분석을 바탕으로 학교 상황과 지역 여건에 맞는 지원기관 후보를 추천합니다.")
     analysis = st.session_state.get("structured_counseling_analysis")
     if not analysis:
@@ -2965,9 +3086,7 @@ def render_rag_search_section() -> None:
 
     if st.button("지원기관 추천하기", type="primary", use_container_width=True, key="btn_run_rag"):
         with st.spinner("지원기관 후보를 찾고 추천 이유를 생성하고 있습니다..."):
-            st.session_state.pop("generated_document_json", None)
-            st.session_state.pop("generated_document_json_payload_hash", None)
-            st.session_state.pop("generated_docx_files", None)
+            clear_pipeline_from("recommendation")
             results = run_rag_search()
             if results and get_gemini_api_key():
                 payload = build_resource_recommendation_payload(
@@ -3319,7 +3438,7 @@ def validate_generated_docx(path: Path) -> Tuple[bool, str]:
 
 
 def render_document_generation_section() -> None:
-    st.markdown("<div class='panel'><div class='panel-title'>회의록 생성</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     if not st.session_state.get("structured_counseling_analysis") or not st.session_state.get("resource_recommendation_explanation"):
         st.info("상담 결과 분석과 지원기관 검색이 완료되면 회의록을 생성할 수 있습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -3532,12 +3651,17 @@ def page_first_checklist() -> None:
     selected_student = selected_label.split(" | ")[0]
 
     render_workflow_section_header("1", "1차 체크리스트", "학생의 학교생활에서 관찰된 신호를 입력합니다.")
-    st.markdown("<div class='panel'><div class='panel-title'>1차 체크리스트</div>", unsafe_allow_html=True)
+    st.markdown("<div class='panel'>", unsafe_allow_html=True)
     responses = render_checklist_input(items_df, selected_student)
     calc_clicked = st.button("체크리스트 결과 계산", type="primary", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     if not responses:
+        return
+
+    if checklist_input_changed(selected_student, responses) and not calc_clicked:
+        clear_pipeline_from("checklist")
+        st.info("체크리스트 입력이 변경되었습니다. 다시 계산하면 이후 단계가 새 결과에 맞춰 열립니다.")
         return
 
     if calc_clicked:
@@ -3598,22 +3722,7 @@ def page_first_checklist() -> None:
             st.session_state.students = all_df
 
         # 새 체크리스트 계산 이후 이전 단계 결과가 섞이지 않도록 후속 생성 결과를 초기화한다.
-        for key in [
-            "generated_counseling_questions",
-            "structured_counseling_analysis",
-            "rag_search_results",
-            "resource_recommendation_explanation",
-            "generated_document_json",
-            "generated_docx_files",
-        ]:
-            st.session_state.pop(key, None)
-        for key in [
-            "generated_counseling_questions_payload_hash",
-            "structured_counseling_analysis_payload_hash",
-            "resource_recommendation_explanation_payload_hash",
-            "generated_document_json_payload_hash",
-        ]:
-            st.session_state.pop(key, None)
+        clear_pipeline_from("questions")
 
     if not st.session_state.get("first_check_result") or st.session_state.get("last_checklist_student") != selected_student:
         st.info("체크리스트 입력 후 ‘체크리스트 결과 계산’을 누르면 결과가 표시됩니다.")
@@ -3813,7 +3922,7 @@ def render_sidebar() -> str:
     st.sidebar.markdown("### 메뉴")
     page = st.sidebar.radio(
         "화면 선택",
-        ["담임교사 대시보드", "1차 체크리스트", "학생 상세 리포트", "지원 현황표"],
+        ["교사 대시보드", "1차 체크리스트", "학생 상세 리포트", "지원 현황표"],
         index=0,
         label_visibility="collapsed",
     )
@@ -3843,7 +3952,7 @@ def main() -> None:
     render_role_switch()
     page = render_sidebar()
 
-    if page == "담임교사 대시보드":
+    if page == "교사 대시보드":
         page_dashboard()
     elif page == "1차 체크리스트":
         page_first_checklist()
