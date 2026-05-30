@@ -26,8 +26,80 @@ def _secret_get(key: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
+def _split_key_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        raw_values = [str(v).strip() for v in value]
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        # TOML 배열이 아니라 줄바꿈/쉼표로 넣은 경우도 지원한다.
+        raw_values = re.split(r"[\n,]", text)
+    return [v.strip().strip('"').strip("'") for v in raw_values if v and v.strip()]
+
+
+def get_gemini_api_keys() -> list[str]:
+    """Streamlit secrets 또는 환경변수에서 여러 Gemini 키를 읽는다.
+
+    지원 형식:
+    - GEMINI_API_KEYS = ["key1", "key2", "key3"]
+    - GEMINI_API_KEYS = "key1,key2,key3"
+    - GEMINI_API_KEY, GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3
+    - GOOGLE_API_KEY
+    """
+    keys: list[str] = []
+    try:
+        if "GEMINI_API_KEYS" in st.secrets:
+            keys.extend(_split_key_values(st.secrets.get("GEMINI_API_KEYS")))
+    except Exception:
+        pass
+    env_keys = os.getenv("GEMINI_API_KEYS")
+    if env_keys:
+        keys.extend(_split_key_values(env_keys))
+
+    for name in ["GEMINI_API_KEY", "GEMINI_API_KEY_1", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GOOGLE_API_KEY"]:
+        try:
+            value = st.secrets.get(name, None)
+            if value:
+                keys.extend(_split_key_values(value))
+        except Exception:
+            pass
+        value = os.getenv(name)
+        if value:
+            keys.extend(_split_key_values(value))
+
+    # 순서 유지 중복 제거
+    deduped: list[str] = []
+    seen = set()
+    for key in keys:
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(key)
+    return deduped
+
+
+def _get_active_key_index(num_keys: int) -> int:
+    try:
+        idx = int(st.session_state.get("gemini_active_key_index", 0) or 0)
+    except Exception:
+        idx = 0
+    if num_keys <= 0:
+        return 0
+    return max(0, min(idx, num_keys - 1))
+
+
+def _key_label(index: int, key: str) -> str:
+    tail = key[-4:] if key else "----"
+    return f"키 {index + 1}(...{tail})"
+
+
 def get_gemini_api_key() -> Optional[str]:
-    return _secret_get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    keys = get_gemini_api_keys()
+    if not keys:
+        return None
+    return keys[_get_active_key_index(len(keys))]
 
 
 def get_gemini_model() -> str:
@@ -82,7 +154,7 @@ def _safe_session_set(key: str, value: Any) -> None:
         pass
 
 
-def _record_gemini_call(model: str) -> None:
+def _record_gemini_call(model: str, key_label: str = "") -> None:
     """현재 Streamlit 세션에서 실제 Gemini API 호출 횟수를 기록한다.
 
     Google 쪽 quota의 공식 카운터는 아니지만, 버튼 한 번에 몇 회 호출되는지
@@ -91,7 +163,7 @@ def _record_gemini_call(model: str) -> None:
     count = int(_safe_session_get("gemini_call_count_session", 0) or 0) + 1
     _safe_session_set("gemini_call_count_session", count)
     log = list(_safe_session_get("gemini_call_log_session", []) or [])
-    log.append({"time": datetime.now().strftime("%H:%M:%S"), "model": model})
+    log.append({"time": datetime.now().strftime("%H:%M:%S"), "model": model, "key": key_label})
     _safe_session_set("gemini_call_log_session", log[-30:])
 
 
@@ -142,13 +214,41 @@ def _transient_retry_sleep(attempt: int) -> None:
     time.sleep(delay)
 
 
+
+
+def _is_key_or_quota_error(exc: Exception) -> bool:
+    raw = str(exc)
+    return (
+        "RESOURCE_EXHAUSTED" in raw
+        or "429" in raw
+        or "PERMISSION_DENIED" in raw
+        or "403" in raw
+        or "quota" in raw.lower()
+    )
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    raw = str(exc)
+    return "RESOURCE_EXHAUSTED" in raw or "429" in raw or "quota" in raw.lower()
+
+
+def _mark_active_key(index: int) -> None:
+    try:
+        st.session_state["gemini_active_key_index"] = index
+    except Exception:
+        pass
+
+
+def _record_key_switch(from_label: str, to_label: str, reason: str) -> None:
+    try:
+        st.session_state["gemini_last_key_switch_message"] = f"{from_label}에서 {to_label}로 전환했습니다. 사유: {reason}"
+    except Exception:
+        pass
+
 def call_llm(system_prompt: str, user_prompt: str, response_schema: Any = None) -> str:
-    api_key = get_gemini_api_key()
-    if not api_key:
+    keys = get_gemini_api_keys()
+    if not keys:
         raise RuntimeError("GEMINI_API_KEY가 설정되어 있지 않습니다.")
-    client = get_gemini_client(api_key)
-    if client is None:
-        raise RuntimeError("Gemini API 키가 설정되어 있지 않습니다.")
 
     try:
         from google.genai import types
@@ -164,26 +264,52 @@ def call_llm(system_prompt: str, user_prompt: str, response_schema: Any = None) 
         config_kwargs["response_schema"] = response_schema
 
     model = get_gemini_model()
-
     max_transient_retries = _get_int_setting("GEMINI_TRANSIENT_RETRIES", 1)
-    last_exc = None
-    for attempt in range(max_transient_retries + 1):
-        try:
-            _record_gemini_call(model)
-            response = client.models.generate_content(
-                model=model,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(**config_kwargs),
-            )
-            return strip_json_code_fence(extract_text_from_gemini_response(response))
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max_transient_retries and _is_transient_503(exc):
-                _transient_retry_sleep(attempt)
-                continue
-            raise
-    raise last_exc if last_exc is not None else RuntimeError("Gemini 호출에 실패했습니다.")
 
+    start_index = _get_active_key_index(len(keys))
+    ordered_indices = list(range(start_index, len(keys))) + list(range(0, start_index))
+    last_exc: Optional[Exception] = None
+    exhausted_labels: list[str] = []
+
+    for key_index in ordered_indices:
+        api_key = keys[key_index]
+        label = _key_label(key_index, api_key)
+        client = get_gemini_client(api_key)
+        if client is None:
+            last_exc = RuntimeError("Gemini API 키가 설정되어 있지 않습니다.")
+            continue
+
+        for attempt in range(max_transient_retries + 1):
+            try:
+                _record_gemini_call(model, label)
+                response = client.models.generate_content(
+                    model=model,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(**config_kwargs),
+                )
+                if key_index != start_index:
+                    _record_key_switch(_key_label(start_index, keys[start_index]), label, "이전 키의 사용량 또는 권한 제한")
+                _mark_active_key(key_index)
+                return strip_json_code_fence(extract_text_from_gemini_response(response))
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_transient_retries and _is_transient_503(exc):
+                    _transient_retry_sleep(attempt)
+                    continue
+                # 사용량 제한 또는 해당 키 권한 문제라면 다음 예비 키로 넘어간다.
+                if _is_key_or_quota_error(exc) and len(keys) > 1:
+                    exhausted_labels.append(label)
+                    break
+                raise
+
+    if last_exc is not None:
+        if exhausted_labels and _is_quota_error(last_exc):
+            raise RuntimeError(
+                "모든 Gemini API 키가 사용량 제한에 걸렸거나 같은 프로젝트 한도를 공유하고 있습니다. "
+                f"시도한 키: {', '.join(exhausted_labels)}. 원본 오류: {last_exc}"
+            ) from last_exc
+        raise last_exc
+    raise RuntimeError("Gemini 호출에 실패했습니다.")
 
 def call_llm_with_validation(
     system_prompt: str,

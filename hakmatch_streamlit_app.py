@@ -536,7 +536,32 @@ def inject_css() -> None:
             padding-top: 10px;
             margin-top: 18px;
         }
-        </style>
+        
+.soft-card.compact-card {
+    background:#ffffff;
+    border:1px solid #d8e2ef;
+    border-radius:16px;
+    padding:18px 20px;
+    margin:12px 0 12px 0;
+    box-shadow:0 4px 12px rgba(15,23,42,.04);
+}
+.readable-note {
+    font-size:1.02rem;
+    line-height:1.75;
+    color:#243044;
+    margin-top:8px;
+}
+.area-inline {
+    display:inline-block;
+    margin-top:8px;
+    padding:8px 12px;
+    border-radius:999px;
+    background:#eef5ff;
+    color:#1d4ed8;
+    font-weight:800;
+}
+
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -3842,6 +3867,71 @@ def page_first_checklist() -> None:
 # -----------------------------------------------------------------------------
 # 페이지: 학생 상세 / 지원 현황 / 데이터 연결 안내
 # -----------------------------------------------------------------------------
+def _get_generated_meeting_file() -> Optional[Path]:
+    files = st.session_state.get("generated_docx_files", {}) or {}
+    meeting_path = files.get("meeting")
+    if meeting_path and Path(meeting_path).exists():
+        return Path(meeting_path)
+    return None
+
+
+def render_student_detail_followup_summary(selected_student: str, student: pd.Series) -> None:
+    """학생 상세 리포트의 오른쪽 영역에 현재까지 완료된 후속 결과를 간단히 표시한다."""
+    areas = [a for a in SUPPORT_AREAS if int(student.get(a, 0)) > 0]
+    st.write("우선 검토 영역: " + (", ".join(areas) if areas else "현재 뚜렷한 우선 영역 없음"))
+    st.write("관찰 신호: " + normalize_text(student.get("주요신호")))
+
+    # 현재 세션에서 선택 학생에 대해 2차 상담 결과가 생성된 경우에는
+    # 1차 체크리스트 안내 문구 대신 실제 후속 결과를 보여준다.
+    same_student = st.session_state.get("last_checklist_student") == selected_student
+    analysis = st.session_state.get("structured_counseling_analysis") if same_student else None
+    meeting_file = _get_generated_meeting_file() if same_student else None
+
+    if analysis:
+        analysis = postprocess_counseling_analysis_result(analysis, st.session_state.get("teacher_counseling_note", ""))
+        summary = analysis.get("analysis_summary", {})
+        one_line = summary.get("support_needed_reason") or summary.get("one_sentence_summary") or "상담 결과를 바탕으로 지원 검토 방향을 정리했습니다."
+        status = summary.get("support_needed") or "지원 검토 필요"
+        target_areas = derive_integrated_support_areas(analysis)
+        area_text = ", ".join(target_areas) if target_areas else normalize_text(analysis.get("primary_area", "-"))
+
+        st.markdown(
+            f"""
+            <div class='soft-card compact-card'>
+                <div class='subtle-label'>2차 상담 결과 정리</div>
+                <div class='mini-title'>{status}</div>
+                <div class='readable-note'>{one_line}</div>
+                <div class='subtle-label' style='margin-top:14px;'>상담에서 확인된 지원 영역</div>
+                <div class='area-inline'>{area_text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        rec = st.session_state.get("resource_recommendation_explanation") or {}
+        rec_count = len(rec.get("recommended_resources", []) or [])
+        if rec_count:
+            st.caption(f"지원기관 후보 {rec_count}곳을 추천했습니다.")
+        if meeting_file:
+            st.download_button(
+                "회의록 DOCX 다운로드",
+                meeting_file.read_bytes(),
+                meeting_file.name,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key=f"student_detail_meeting_download_{selected_student}",
+            )
+        else:
+            st.info("회의록을 생성하면 이곳에서 바로 다운로드할 수 있습니다.")
+        return
+
+    if student["최종단계"] == "심층 파악 필요":
+        st.error("심층 파악이 필요한 상태입니다. 1차 체크리스트 결과를 바탕으로 2차 상담 질문 생성을 검토합니다.")
+    elif student["최종단계"] == "주의 및 탐색":
+        st.warning("담임교사의 가벼운 면담과 관찰 기록 업데이트를 권장합니다.")
+    else:
+        st.info("현재는 일상적 관찰 단계입니다.")
+
+
 def page_student_detail() -> None:
     render_page_title("학생 상세 리포트", "선택 학생의 현재 지원 신호와 다음 조치 후보를 확인합니다.")
     df = get_view_students()
@@ -3871,15 +3961,7 @@ def page_student_detail() -> None:
 
     with col2:
         st.markdown("<div class='panel'><div class='panel-title'>지원 검토 메모</div>", unsafe_allow_html=True)
-        areas = [a for a in SUPPORT_AREAS if int(student.get(a, 0)) > 0]
-        st.write("우선 검토 영역: " + (", ".join(areas) if areas else "현재 뚜렷한 우선 영역 없음"))
-        st.write("관찰 신호: " + normalize_text(student.get("주요신호")))
-        if student["최종단계"] == "심층 파악 필요":
-            st.error("심층 파악이 필요한 상태입니다. 1차 체크리스트 결과를 바탕으로 2차 상담 질문 생성을 검토합니다.")
-        elif student["최종단계"] == "주의 및 탐색":
-            st.warning("담임교사의 가벼운 면담과 관찰 기록 업데이트를 권장합니다.")
-        else:
-            st.info("현재는 일상적 관찰 단계입니다.")
+        render_student_detail_followup_summary(selected, student)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
