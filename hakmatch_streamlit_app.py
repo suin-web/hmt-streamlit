@@ -643,6 +643,59 @@ def normalize_area_name(value: str) -> str:
     return mapping.get(value, value)
 
 
+
+
+def display_area_name(value: Any) -> str:
+    """내부 계산용 영역명을 사용자 화면용 용어로 바꾼다."""
+    area = normalize_area_name(value)
+    mapping = {
+        "학업": "학습",
+        "복지경제": "복지경제",
+        "심리정서": "심리정서",
+        "진로": "진로",
+        "긴급확인": "긴급확인",
+        "공통": "공통",
+    }
+    return mapping.get(area, normalize_text(value))
+
+
+def display_area_list(values: Iterable[Any]) -> List[str]:
+    result: List[str] = []
+    for value in values or []:
+        name = display_area_name(value)
+        if name and name not in result:
+            result.append(name)
+    return result
+
+
+def display_text(value: Any) -> str:
+    """사용자에게 보이는 문구에서 내부 개발용 용어를 정리한다."""
+    text = normalize_text(value)
+    if not text:
+        return ""
+    replacements = {
+        "복지 및 환경지원 영역": "복지 및 경제 지원 영역",
+        "복지 및 환경 지원 영역": "복지 및 경제 지원 영역",
+        "복지·환경": "복지·경제",
+        "환경지원": "경제 지원",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    # 학습-A, 정서-C처럼 내부 분석용으로 붙인 문항 코드는 사용자 화면에서 제거한다.
+    text = re.sub(r"(?:학습|정서|환경|진로)-[A-Z](?:·(?:학습|정서|환경|진로)-[A-Z])*\s*심층 유도[:：]?\s*", "", text)
+    text = re.sub(r"(?:학습|정서|환경|진로)-[A-Z]", "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" .·-:")
+    # 학업중단처럼 고유 표현은 유지하고, 영역명으로 쓰인 학업만 학습으로 표기한다.
+    text = re.sub(r"(?<![가-힣])학업(?![가-힣])", "학습", text)
+    text = text.replace("학업 영역", "학습 영역")
+    text = text.replace("학업 지원", "학습 지원")
+    return text
+
+
+def clean_checklist_item_label(item_text: Any) -> str:
+    """학습-A, 정서-C 같은 내부 문항 코드를 사용자 화면에서 제거한다."""
+    return display_text(item_text)
+
 def normalize_area_list(value: Any) -> List[str]:
     if value is None:
         return []
@@ -1071,21 +1124,20 @@ def derive_counseling_consideration_areas(
             area = normalize_area_name(row.get("domain"))
             if area in focus and score == 2:
                 focus[area] += 10
-                reasons[area].append(f"{normalize_text(row.get('item_code'))} 문항이 뚜렷하게 관찰됨")
+                reasons[area].append("해당 영역의 관찰 신호가 뚜렷하게 확인됨")
             if area in focus and score >= 1:
-                text = normalize_text(row.get("item_text"))
-                code = normalize_text(row.get("item_code"))
-                short = text[:28] + ("..." if len(text) > 28 else "")
-                reasons[area].append(f"{code} 체크: {short}")
+                text = clean_checklist_item_label(row.get("item_text"))
+                short = text[:32] + ("..." if len(text) > 32 else "")
+                reasons[area].append(f"관찰 신호: {short}")
 
     for item in red_flag_result.get("urgent_flag_items", []):
         area = normalize_area_name(item.get("area"))
         if area in focus:
             focus[area] += 20
-            reasons[area].append(f"{item.get('item_code')} 우선 확인 필요 신호")
+            reasons[area].append("우선 확인 필요 신호")
 
     for rule in active_deep_rules:
-        title = rule.get("rule_title", rule.get("rule_id", "심층 유도 분석"))
+        title = display_text(rule.get("rule_title", rule.get("rule_id", "심층 유도 분석")))
         for area in rule.get("linked_areas", []):
             area = normalize_area_name(area)
             if area in focus:
@@ -1427,19 +1479,18 @@ def render_workflow_section_header(number: str, title: str, subtitle: str = "") 
 
 
 def area_chips_html(areas: List[str], css_class: str = "area-chip-main") -> str:
-    clean = [normalize_text(a) for a in areas if normalize_text(a) and normalize_text(a) != "긴급확인"]
+    clean = display_area_list([a for a in areas if normalize_area_name(a) != "긴급확인"])
     if not clean:
         clean = ["현재 뚜렷한 우선 영역 없음"]
-    chips = "".join(f"<span class='{css_class}'>{html.escape(a)}</span>" for a in dict.fromkeys(clean))
+    chips = "".join(f"<span class='{css_class}'>{html.escape(display_text(a))}</span>" for a in dict.fromkeys(clean))
     return f"<div class='area-chip-row'>{chips}</div>"
 
 
 def area_help_text(prefix: str, areas: List[str], empty_text: str = "추가로 표시할 영역 없음") -> str:
-    clean = [normalize_area_name(a) for a in areas if normalize_area_name(a) and normalize_area_name(a) != "긴급확인"]
-    clean = list(dict.fromkeys(clean))
+    clean = display_area_list([a for a in areas if normalize_area_name(a) != "긴급확인"])
     if clean:
-        return f"{prefix}: {', '.join(clean)}"
-    return empty_text
+        return f"{display_text(prefix)}: {', '.join(clean)}"
+    return display_text(empty_text)
 
 
 def get_checklist_direct_and_related_areas(first_check_result: Dict[str, Any], counseling_areas: List[Dict[str, Any]], active_deep_rules: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[str], List[str]]:
@@ -1472,11 +1523,14 @@ def get_checklist_direct_and_related_areas(first_check_result: Dict[str, Any], c
 
 
 def metric_card(label: str, value: str, help_text: str = "") -> str:
+    label_t = display_text(label)
+    value_t = display_text(value)
+    help_t = display_text(help_text)
     return f"""
     <div class="metric-card">
-        <div class="metric-label">{html.escape(str(label))}</div>
-        <div class="metric-value">{html.escape(str(value))}</div>
-        <div class="metric-help">{html.escape(str(help_text))}</div>
+        <div class="metric-label">{html.escape(label_t)}</div>
+        <div class="metric-value">{html.escape(value_t)}</div>
+        <div class="metric-help">{html.escape(help_t)}</div>
     </div>
     """
 
@@ -1485,8 +1539,8 @@ def analysis_summary_card(status: str, summary_text: str) -> str:
     return f"""
     <div class="analysis-summary-card">
         <div class="analysis-summary-label">지원 검토 안내</div>
-        <div class="analysis-summary-status">{html.escape(str(status or '-'))}</div>
-        <div class="analysis-summary-text">{html.escape(str(summary_text or '상담 결과를 바탕으로 추가 검토가 필요합니다.'))}</div>
+        <div class="analysis-summary-status">{html.escape(display_text(status or '-'))}</div>
+        <div class="analysis-summary-text">{html.escape(display_text(summary_text or '상담 결과를 바탕으로 추가 검토가 필요합니다.'))}</div>
     </div>
     """
 
@@ -1494,9 +1548,9 @@ def analysis_summary_card(status: str, summary_text: str) -> str:
 def resource_detail_table_html(rows: List[Tuple[str, Any]]) -> str:
     body = []
     for label, value in rows:
-        val = "-" if value is None or str(value).strip() == "" else str(value)
+        val = "-" if value is None or str(value).strip() == "" else display_text(value)
         body.append(
-            f"<tr><th>{html.escape(str(label))}</th><td>{html.escape(val)}</td></tr>"
+            f"<tr><th>{html.escape(display_text(label))}</th><td>{html.escape(val)}</td></tr>"
         )
     return "<table class='resource-detail-table'>" + "".join(body) + "</table>"
 
@@ -1546,7 +1600,7 @@ def domain_grid(row: pd.Series) -> str:
     cells = "".join(
         f"""
         <div class="mini-domain">
-            <div class="domain-name">{area}</div>
+            <div class="domain-name">{html.escape(display_area_name(area))}</div>
             {dots(int(row.get(area, 0)))}
         </div>
         """
@@ -1568,12 +1622,12 @@ def render_student_card(row: pd.Series) -> None:
                 <div style="font-weight:900;font-size:1.02rem;color:#0f172a;">
                     {stage_badge(stage)} {row.get('이름')} <span class="small-muted">({row.get('학생코드')})</span>
                 </div>
-                <div class="small-muted">{row.get('학년')} {row.get('반')} · 우선 영역: <span style="font-weight:900;">{top_area}</span></div>
+                <div class="small-muted">{row.get('학년')} {row.get('반')} · 우선 영역: <span style="font-weight:900;">{display_area_name(top_area) if top_area != '-' else '-'}</span></div>
             </div>
             {domain_grid(row)}
             <div style="margin-top:10px;color:#334155;font-size:.9rem;">
-                <span style="font-weight:900;">주요 신호</span>: {row.get('주요신호')}<br>
-                <span style="font-weight:900;">권장 Action</span>: {row.get('권장Action')}
+                <span style="font-weight:900;">주요 신호</span>: {display_text(row.get('주요신호'))}<br>
+                <span style="font-weight:900;">권장 Action</span>: {display_text(row.get('권장Action'))}
             </div>
         </div>
         """,
@@ -1645,6 +1699,7 @@ def render_domain_score_table(domain_scores: pd.DataFrame, primary_areas: Option
     primary_areas = primary_areas or []
     table = domain_scores.copy()
     table["우선 영역 여부"] = table["지원 영역"].apply(lambda x: "우선" if x in primary_areas else "-")
+    table["지원 영역"] = table["지원 영역"].apply(display_area_name)
     table = table.rename(
         columns={
             "domain_raw_score": "원점수",
@@ -1676,16 +1731,16 @@ def render_deep_rule_cards(active_deep_rules: List[Dict[str, Any]]) -> None:
     if not active_deep_rules:
         st.info("활성화된 심층 유도 분석이 없습니다.")
     for i, rule in enumerate(active_deep_rules, start=1):
-        linked = ", ".join(rule.get("linked_areas", [])) or "-"
+        linked = ", ".join(display_area_list(rule.get("linked_areas", []))) or "-"
         st.markdown(
             f"""
             <div class="recommend-card">
-                <div style="font-weight:900;"><span class="recommend-rank">{i}</span>{rule.get('rule_title', rule.get('rule_id'))}</div>
-                <div class="small-muted">활성화 유형: {rule.get('activation_type')}</div>
+                <div style="font-weight:900;"><span class="recommend-rank">{i}</span>{display_text(rule.get('rule_title', rule.get('rule_id')))}</div>
+                <div class="small-muted">활성화 유형: {display_text(rule.get('activation_type'))}</div>
                 <table class="info-table" style="margin-top:8px;">
-                    <tr><th>표면 신호</th><td>{rule.get('surface_signal', '-')}</td></tr>
-                    <tr><th>가능한 이면 변인</th><td>{rule.get('possible_hidden_factors', '-')}</td></tr>
-                    <tr><th>심층 유도 서술</th><td>{rule.get('deep_guidance_text', '-')}</td></tr>
+                    <tr><th>표면 신호</th><td>{display_text(rule.get('surface_signal', '-'))}</td></tr>
+                    <tr><th>가능한 이면 변인</th><td>{display_text(rule.get('possible_hidden_factors', '-'))}</td></tr>
+                    <tr><th>심층 유도 서술</th><td>{display_text(rule.get('deep_guidance_text', '-'))}</td></tr>
                     <tr><th>연결 지원 영역</th><td>{linked}</td></tr>
                 </table>
             </div>
@@ -1978,20 +2033,20 @@ def render_counseling_question_section() -> None:
     if data:
         summary = data.get("counseling_focus_summary", "")
         if summary:
-            st.markdown(f"<div class='callout'>{summary}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='callout'>{display_text(summary)}</div>", unsafe_allow_html=True)
         for idx, q in enumerate(data.get("recommended_questions", []), start=1):
             qid = q.get("question_id") or f"Q{idx}"
             with st.container(border=True):
                 st.markdown(
-                    f"<div class='question-text'>{html.escape(str(qid))}. {html.escape(str(q.get('question', '')))}</div>",
+                    f"<div class='question-text'>{html.escape(str(qid))}. {html.escape(display_text(q.get('question', '')))}</div>",
                     unsafe_allow_html=True,
                 )
                 with st.expander("상세보기", expanded=False):
                     detail_rows = [
-                        {"항목": "질문 목적", "내용": q.get("purpose", "")},
-                        {"항목": "연결 영역", "내용": q.get("linked_area", "")},
-                        {"항목": "교사 유의사항", "내용": q.get("teacher_caution", "")},
-                        {"항목": "추가 확인", "내용": q.get("follow_up_if_needed", "")},
+                        {"항목": "질문 목적", "내용": display_text(q.get("purpose", ""))},
+                        {"항목": "연결 영역", "내용": display_area_name(q.get("linked_area", ""))},
+                        {"항목": "교사 유의사항", "내용": display_text(q.get("teacher_caution", ""))},
+                        {"항목": "추가 확인", "내용": display_text(q.get("follow_up_if_needed", ""))},
                     ]
                     st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
 
@@ -2308,6 +2363,144 @@ def checklist_input_changed(selected_student: str, responses: Dict[str, Any]) ->
         return False
     return normalize_response_values(stored) != normalize_response_values(responses)
 
+
+
+
+def build_demo_checklist_responses_from_student(student: pd.Series, items_df: pd.DataFrame) -> Dict[str, int]:
+    """상세 리포트에서 심층 파악 대상 학생을 바로 상담 질문 생성 단계로 연결하기 위한 기본 체크리스트 응답."""
+    responses: Dict[str, int] = {}
+    if items_df is None or items_df.empty:
+        return responses
+
+    active_df = items_df.copy()
+    if "active" in active_df.columns:
+        active_df = active_df[active_df["active"].astype(str).str.upper().str.strip() == "Y"]
+    for _, row in active_df.iterrows():
+        responses[normalize_text(row.get("item_id"))] = 0
+
+    for area in SUPPORT_AREAS:
+        try:
+            intensity = int(student.get(area, 0))
+        except Exception:
+            intensity = 0
+        if intensity <= 0:
+            continue
+        area_items = active_df[active_df["domain"].map(normalize_area_name) == area].copy()
+        if area_items.empty:
+            continue
+        # 4단계 점 표시값을 0~2점 체크리스트로 자연스럽게 펼친다.
+        remaining = min(max(intensity, 0), len(area_items) * 2)
+        for _, row in area_items.iterrows():
+            item_id = normalize_text(row.get("item_id"))
+            if remaining >= 2:
+                responses[item_id] = 2
+                remaining -= 2
+            elif remaining == 1:
+                responses[item_id] = 1
+                remaining -= 1
+            else:
+                break
+
+    # 우선 확인 신호가 있는 데모 학생은 정서-C를 기본 선택한다.
+    if bool(student.get("RedFlag", False)):
+        for _, row in active_df.iterrows():
+            item_id = normalize_text(row.get("item_id"))
+            item_code = normalize_text(row.get("item_code"))
+            if item_id == "EMO_C" or item_code == "정서-C":
+                responses[item_id] = max(1, responses.get(item_id, 0))
+                break
+    return responses
+
+
+def calculate_and_store_checklist_for_student(
+    selected_student: str,
+    responses: Dict[str, int],
+    items_df: pd.DataFrame,
+    rule_map_df: Optional[pd.DataFrame],
+    deep_rules_df: Optional[pd.DataFrame],
+    *,
+    update_student_row: bool = True,
+) -> None:
+    """1차 체크리스트 결과 계산과 세션 저장을 한 곳에서 처리한다."""
+    clear_pipeline_from("checklist")
+    first_result = calculate_checklist_scores(items_df, responses)
+    red_flag_result = detect_red_flags(items_df, responses)
+    active_deep_rules = activate_deep_rules(responses, rule_map_df, deep_rules_df)
+    counseling_areas = derive_counseling_consideration_areas(
+        first_result["domain_scores"], responses, red_flag_result, active_deep_rules, items_df
+    )
+    context_result = calculate_context_result(
+        first_result["primary_areas"],
+        first_result["student_raw_score"],
+        first_result["student_scaled_score"],
+        red_flag_result,
+        st.session_state.get("selected_school_context"),
+        st.session_state.get("selected_region_context"),
+    )
+    stage_result = {
+        "score_based_stage": context_result["score_based_stage"],
+        "score_based_action": context_result["score_based_action"],
+        "final_action_stage": context_result["final_action_stage"],
+        "final_action": context_result["final_action"],
+        "final_action_reason": context_result["final_action_reason"],
+        "activate_counseling_form": context_result["activate_counseling_form"],
+    }
+    payload = build_counseling_payload(
+        first_result, red_flag_result, context_result, active_deep_rules, counseling_areas, stage_result
+    )
+
+    st.session_state["first_check_result"] = payload["first_check_result"]
+    st.session_state["red_flag_result"] = payload["red_flag_result"]
+    st.session_state["context_result"] = payload["context_result"]
+    st.session_state["active_deep_rules"] = payload["active_deep_rules"]
+    st.session_state["counseling_consideration_areas"] = counseling_areas
+    st.session_state["last_payload"] = payload
+    st.session_state["last_checklist_student"] = selected_student
+    st.session_state["selected_student_for_checklist"] = selected_student
+    st.session_state.checklist_responses[selected_student] = normalize_response_values(responses)
+
+    if update_student_row:
+        all_df = st.session_state.students.copy()
+        idx = all_df.index[all_df["학생코드"] == selected_student]
+        if len(idx) > 0:
+            idx0 = idx[0]
+            for _, row in first_result["domain_scores"].iterrows():
+                area = row["지원 영역"]
+                all_df.at[idx0, area] = min(4, int(round(float(row["domain_scaled_score"]) / 25)))
+            all_df.at[idx0, "RedFlag"] = bool(red_flag_result.get("urgent_flag"))
+            all_df.at[idx0, "최종단계"] = context_result["final_action_stage"]
+            all_df.at[idx0, "권장Action"] = context_result["final_action"]
+            checked_items: List[str] = []
+            for _, row in items_df.iterrows():
+                item_id = normalize_text(row.get("item_id"))
+                if int(responses.get(item_id, 0)) >= 1:
+                    checked_items.append(clean_checklist_item_label(row.get("item_text")))
+            all_df.at[idx0, "주요신호"] = ", ".join(checked_items[:3]) if checked_items else "선택된 신호 없음"
+            all_df.at[idx0, "기한"] = str(date.today()) if context_result["final_action_stage"] != "일상적 관찰" else "-"
+            st.session_state.students = all_df
+
+
+def prepare_student_checklist_and_open(selected_student: str, student: pd.Series) -> None:
+    """학생 상세 리포트에서 1차 체크리스트 탭으로 이동하면서 입력값과 계산 결과를 준비한다."""
+    items_df = get_active_items_df()
+    if items_df.empty:
+        st.warning("체크리스트 자료를 불러올 수 없어 이동할 수 없습니다.")
+        return
+    rule_map_df = st.session_state.get("rule_map_df")
+    deep_rules_df = st.session_state.get("deep_rules_df")
+    responses = st.session_state.get("checklist_responses", {}).get(selected_student)
+    if not responses:
+        responses = build_demo_checklist_responses_from_student(student, items_df)
+    calculate_and_store_checklist_for_student(
+        selected_student,
+        normalize_response_values(responses),
+        items_df,
+        rule_map_df,
+        deep_rules_df,
+        update_student_row=True,
+    )
+    st.session_state["pending_page"] = "1차 체크리스트"
+    st.session_state["selected_student_for_checklist"] = selected_student
 
 def counseling_analysis_input_changed(note: str, judgment: str, existing: str) -> bool:
     if not st.session_state.get("structured_counseling_analysis"):
@@ -3414,7 +3607,7 @@ def strip_json_code_fence_local(text: str) -> str:
 
 def _nominalize_korean_sentence(sentence: str) -> str:
     """회의록용 문장을 가능한 범위에서 명사형 종결로 정리한다."""
-    text = normalize_text(sentence).strip()
+    text = display_text(sentence).strip()
     if not text:
         return text
     prefix = ""
@@ -3493,8 +3686,8 @@ def _set_cell_text(cell: Any, text: str) -> None:
 
 def _join_list(values: Any) -> str:
     if isinstance(values, list):
-        return "\n".join([f"- {v}" for v in values])
-    return str(values or "")
+        return "\n".join([f"- {display_text(v)}" for v in values])
+    return display_text(values or "")
 
 
 def fill_meeting_docx(template_path: Path, output_path: Path, basic: Dict[str, Any], llm_result: Dict[str, Any]) -> None:
@@ -3511,8 +3704,8 @@ def fill_meeting_docx(template_path: Path, output_path: Path, basic: Dict[str, A
     table.cell(2, 3).text = basic.get("writer", "")
     table.cell(2, 5).text = basic.get("place", "")
     table.cell(3, 1).text = basic.get("attendees", "")
-    table.cell(4, 1).text = basic.get("agenda", "") or mr.get("agenda", "")
-    table.cell(5, 1).text = mr.get("meeting_content", "")
+    table.cell(4, 1).text = display_text(basic.get("agenda", "") or mr.get("agenda", ""))
+    table.cell(5, 1).text = display_text(mr.get("meeting_content", ""))
     support_plan = mr.get("support_plan", None)
     if support_plan is None:
         support_plan = mr.get("decision_items", [])
@@ -3672,7 +3865,7 @@ def page_dashboard() -> None:
     left, right = st.columns([1.35, 1])
     with left:
         st.markdown("<div class='panel'><div class='panel-title'>지원 영역별 분포</div>", unsafe_allow_html=True)
-        domain_counts = pd.DataFrame({"지원영역": SUPPORT_AREAS, "학생수": [(df[a] > 0).sum() for a in SUPPORT_AREAS]})
+        domain_counts = pd.DataFrame({"지원영역": [display_area_name(a) for a in SUPPORT_AREAS], "학생수": [(df[a] > 0).sum() for a in SUPPORT_AREAS]})
         chart_bar(domain_counts, "지원영역", "학생수")
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -3712,14 +3905,13 @@ def render_checklist_input(items_df: pd.DataFrame, selected_student: str) -> Dic
     }
     grouped = items_df.groupby(["domain_order", "domain_label"], dropna=False, sort=True)
     for (_, domain_label), sub in grouped:
-        with st.expander(str(domain_label), expanded=True):
+        with st.expander(display_text(domain_label), expanded=True):
             for _, row in sub.iterrows():
                 item_id = normalize_text(row.get("item_id"))
-                item_code = normalize_text(row.get("item_code"))
-                item_text = normalize_text(row.get("item_text"))
+                item_text = clean_checklist_item_label(row.get("item_text"))
                 default_value = st.session_state.checklist_responses.get(selected_student, {}).get(item_id, 0)
                 value = st.radio(
-                    f"{item_code}. {item_text}",
+                    item_text,
                     [0, 1, 2],
                     index=[0, 1, 2].index(int(default_value)),
                     format_func=lambda x: score_labels[x],
@@ -3747,8 +3939,16 @@ def page_first_checklist() -> None:
         return
 
     student_options = [f"{row['학생코드']} | {row['이름']} | {row['학년']} {row['반']}" for _, row in df.iterrows()]
-    selected_label = st.selectbox("학생 선택", student_options, index=0)
+    preferred_student = st.session_state.get("selected_student_for_checklist")
+    default_index = 0
+    if preferred_student:
+        for i, label in enumerate(student_options):
+            if label.startswith(f"{preferred_student} |"):
+                default_index = i
+                break
+    selected_label = st.selectbox("학생 선택", student_options, index=default_index)
     selected_student = selected_label.split(" | ")[0]
+    st.session_state["selected_student_for_checklist"] = selected_student
 
     render_workflow_section_header("1", "1차 체크리스트", "학생의 학교생활에서 관찰된 신호를 입력합니다.")
     responses = render_checklist_input(items_df, selected_student)
@@ -3763,64 +3963,14 @@ def page_first_checklist() -> None:
         return
 
     if calc_clicked:
-        first_result = calculate_checklist_scores(items_df, responses)
-        red_flag_result = detect_red_flags(items_df, responses)
-        active_deep_rules = activate_deep_rules(responses, rule_map_df, deep_rules_df)
-        counseling_areas = derive_counseling_consideration_areas(
-            first_result["domain_scores"], responses, red_flag_result, active_deep_rules, items_df
+        calculate_and_store_checklist_for_student(
+            selected_student,
+            responses,
+            items_df,
+            rule_map_df,
+            deep_rules_df,
+            update_student_row=True,
         )
-        context_result = calculate_context_result(
-            first_result["primary_areas"],
-            first_result["student_raw_score"],
-            first_result["student_scaled_score"],
-            red_flag_result,
-            st.session_state.get("selected_school_context"),
-            st.session_state.get("selected_region_context"),
-        )
-        stage_result = {
-            "score_based_stage": context_result["score_based_stage"],
-            "score_based_action": context_result["score_based_action"],
-            "final_action_stage": context_result["final_action_stage"],
-            "final_action": context_result["final_action"],
-            "final_action_reason": context_result["final_action_reason"],
-            "activate_counseling_form": context_result["activate_counseling_form"],
-        }
-        payload = build_counseling_payload(
-            first_result, red_flag_result, context_result, active_deep_rules, counseling_areas, stage_result
-        )
-
-        # 이후 단계에서 사용할 결과 저장
-        st.session_state["first_check_result"] = payload["first_check_result"]
-        st.session_state["red_flag_result"] = payload["red_flag_result"]
-        st.session_state["context_result"] = payload["context_result"]
-        st.session_state["active_deep_rules"] = payload["active_deep_rules"]
-        st.session_state["counseling_consideration_areas"] = counseling_areas
-        st.session_state["last_payload"] = payload
-        st.session_state["last_checklist_student"] = selected_student
-        st.session_state.checklist_responses[selected_student] = responses
-
-        # 학생 목록에도 계산 결과를 반영하되, 사용자에게는 내부 처리로 노출하지 않는다.
-        all_df = st.session_state.students.copy()
-        idx = all_df.index[all_df["학생코드"] == selected_student]
-        if len(idx) > 0:
-            idx0 = idx[0]
-            for _, row in first_result["domain_scores"].iterrows():
-                area = row["지원 영역"]
-                all_df.at[idx0, area] = min(4, int(round(float(row["domain_scaled_score"]) / 25)))
-            all_df.at[idx0, "RedFlag"] = bool(red_flag_result.get("urgent_flag"))
-            all_df.at[idx0, "최종단계"] = context_result["final_action_stage"]
-            all_df.at[idx0, "권장Action"] = context_result["final_action"]
-            checked_codes = []
-            for _, row in items_df.iterrows():
-                item_id = normalize_text(row.get("item_id"))
-                if int(responses.get(item_id, 0)) >= 1:
-                    checked_codes.append(normalize_text(row.get("item_code")))
-            all_df.at[idx0, "주요신호"] = ", ".join(checked_codes) if checked_codes else "선택된 신호 없음"
-            all_df.at[idx0, "기한"] = str(date.today()) if context_result["final_action_stage"] != "일상적 관찰" else "-"
-            st.session_state.students = all_df
-
-        # 새 체크리스트 계산 이후 이전 단계 결과가 섞이지 않도록 후속 생성 결과를 초기화한다.
-        clear_pipeline_from("questions")
 
     if not st.session_state.get("first_check_result") or st.session_state.get("last_checklist_student") != selected_student:
         st.info("체크리스트 입력 후 ‘체크리스트 결과 계산’을 누르면 결과가 표시됩니다.")
@@ -3877,9 +4027,9 @@ def _get_generated_meeting_file() -> Optional[Path]:
 
 def render_student_detail_followup_summary(selected_student: str, student: pd.Series) -> None:
     """학생 상세 리포트의 오른쪽 영역에 현재까지 완료된 후속 결과를 간단히 표시한다."""
-    areas = [a for a in SUPPORT_AREAS if int(student.get(a, 0)) > 0]
+    areas = [display_area_name(a) for a in SUPPORT_AREAS if int(student.get(a, 0)) > 0]
     st.write("우선 검토 영역: " + (", ".join(areas) if areas else "현재 뚜렷한 우선 영역 없음"))
-    st.write("관찰 신호: " + normalize_text(student.get("주요신호")))
+    st.write("관찰 신호: " + display_text(student.get("주요신호")))
 
     # 현재 세션에서 선택 학생에 대해 2차 상담 결과가 생성된 경우에는
     # 1차 체크리스트 안내 문구 대신 실제 후속 결과를 보여준다.
@@ -3893,14 +4043,14 @@ def render_student_detail_followup_summary(selected_student: str, student: pd.Se
         one_line = summary.get("support_needed_reason") or summary.get("one_sentence_summary") or "상담 결과를 바탕으로 지원 검토 방향을 정리했습니다."
         status = summary.get("support_needed") or "지원 검토 필요"
         target_areas = derive_integrated_support_areas(analysis)
-        area_text = ", ".join(target_areas) if target_areas else normalize_text(analysis.get("primary_area", "-"))
+        area_text = ", ".join(display_area_list(target_areas)) if target_areas else display_area_name(analysis.get("primary_area", "-"))
 
         st.markdown(
             f"""
             <div class='soft-card compact-card'>
                 <div class='subtle-label'>2차 상담 결과 정리</div>
-                <div class='mini-title'>{status}</div>
-                <div class='readable-note'>{one_line}</div>
+                <div class='mini-title'>{display_text(status)}</div>
+                <div class='readable-note'>{display_text(one_line)}</div>
                 <div class='subtle-label' style='margin-top:14px;'>상담에서 확인된 지원 영역</div>
                 <div class='area-inline'>{area_text}</div>
             </div>
@@ -3926,8 +4076,14 @@ def render_student_detail_followup_summary(selected_student: str, student: pd.Se
 
     if student["최종단계"] == "심층 파악 필요":
         st.error("심층 파악이 필요한 상태입니다. 1차 체크리스트 결과를 바탕으로 2차 상담 질문 생성을 검토합니다.")
+        if st.button("1차 체크리스트로 이동해 상담 질문 만들기", type="primary", use_container_width=True, key=f"open_checklist_{selected_student}"):
+            prepare_student_checklist_and_open(selected_student, student)
+            st.rerun()
     elif student["최종단계"] == "주의 및 탐색":
         st.warning("담임교사의 가벼운 면담과 관찰 기록 업데이트를 권장합니다.")
+        if st.button("1차 체크리스트에서 확인하기", use_container_width=True, key=f"open_checklist_watch_{selected_student}"):
+            prepare_student_checklist_and_open(selected_student, student)
+            st.rerun()
     else:
         st.info("현재는 일상적 관찰 단계입니다.")
 
@@ -3967,8 +4123,9 @@ def page_student_detail() -> None:
 
 def make_status_table(df: pd.DataFrame) -> pd.DataFrame:
     table = df.copy()
-    table["지원영역"] = table.apply(lambda r: ", ".join([a for a in SUPPORT_AREAS if int(r[a]) > 0]) or "-", axis=1)
-    table["다음 할 일"] = table["권장Action"]
+    table["지원영역"] = table.apply(lambda r: ", ".join([display_area_name(a) for a in SUPPORT_AREAS if int(r[a]) > 0]) or "-", axis=1)
+    table["주요신호"] = table["주요신호"].map(display_text)
+    table["다음 할 일"] = table["권장Action"].map(display_text)
     return table[["학생코드", "학년", "반", "최종단계", "RedFlag", "지원영역", "주요신호", "다음 할 일", "담당자", "기한"]]
 
 
@@ -4007,6 +4164,10 @@ def init_state() -> None:
         st.session_state.homeroom_class = DEFAULT_CLASS
     if "checklist_responses" not in st.session_state:
         st.session_state.checklist_responses = {}
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = "교사 대시보드"
+    if "selected_student_for_checklist" not in st.session_state:
+        st.session_state.selected_student_for_checklist = None
 
     school_db = load_school_databases()
     st.session_state.school_db = school_db
@@ -4075,11 +4236,18 @@ def render_sidebar() -> str:
 
     st.sidebar.divider()
     st.sidebar.markdown("### 메뉴")
+    menu_options = ["교사 대시보드", "1차 체크리스트", "학생 상세 리포트", "지원 현황표"]
+    pending_page = st.session_state.pop("pending_page", None)
+    if pending_page in menu_options:
+        st.session_state.current_page = pending_page
+    if st.session_state.get("current_page") not in menu_options:
+        st.session_state.current_page = menu_options[0]
     page = st.sidebar.radio(
         "화면 선택",
-        ["교사 대시보드", "1차 체크리스트", "학생 상세 리포트", "지원 현황표"],
-        index=0,
+        menu_options,
+        index=menu_options.index(st.session_state.current_page),
         label_visibility="collapsed",
+        key="current_page",
     )
 
     school = st.session_state.selected_school_info
