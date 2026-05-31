@@ -64,23 +64,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap');
-
-    html, body, [class*="css"], .stApp, .stMarkdown, .stText, .stButton, .stSelectbox, .stDataFrame {
-        font-family: 'Noto Sans KR', sans-serif !important;
-    }
-
-    div, span, p, h1, h2, h3, h4, h5, h6, button, input, textarea, select, table {
-        font-family: 'Noto Sans KR', sans-serif !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 
@@ -165,6 +148,42 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap');
+
+        html, body, .stApp,
+        .stApp p, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+        .stApp button, .stApp input, .stApp textarea, .stApp select, .stApp label,
+        .stApp table, .stApp th, .stApp td,
+        .stApp [data-testid="stMarkdownContainer"],
+        .stApp [data-testid="stText"],
+        .stApp [data-testid="stDataFrame"],
+        .stApp [data-testid="stSelectbox"],
+        .stApp [data-testid="stRadio"] {
+            font-family: 'Noto Sans KR', sans-serif !important;
+        }
+
+        /* Streamlit 기본 아이콘은 폰트 ligature 방식이라 전체 span에 폰트를 덮으면
+           arrow_drop_down 같은 아이콘 이름이 글자로 노출된다. 아이콘 폰트는 원래대로 둔다. */
+        .stApp .material-icons,
+        .stApp .material-symbols-rounded,
+        .stApp .material-symbols-outlined,
+        .stApp span[class*="material-icons"],
+        .stApp span[class*="material-symbols"],
+        .stApp [data-testid="stIconMaterial"],
+        .stApp [class*="stIconMaterial"] {
+            font-family: 'Material Symbols Rounded', 'Material Symbols Outlined', 'Material Icons' !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            line-height: 1 !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-wrap: normal !important;
+            direction: ltr !important;
+            -webkit-font-feature-settings: 'liga' !important;
+            -webkit-font-smoothing: antialiased !important;
+        }
+
         :root {
             --blue: #2f6bff;
             --deep-blue: #0b2a55;
