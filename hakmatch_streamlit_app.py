@@ -2115,6 +2115,8 @@ def build_counseling_analysis_user_prompt(payload: Dict[str, Any]) -> str:
 - 위 영역들은 참고자료일 뿐이다.
 - 상담 메모에서 직접 확인된 내용만 primary_area, key_signals, rag_search_queries에 반영하라.
 - 상담 메모에 “문제 없음”, “어려움 없음”, “성적이 좋음”, “경제적 부담 없음”처럼 부정 또는 양호함이 적힌 영역은 제외하라.
+- 교사의 지원 필요 판단은 반드시 analysis_summary.support_needed에 그대로 반영하라.
+- 교사의 지원 필요 판단이 “현재 유지”이면 support_needed도 반드시 “현재 유지”로 작성하고, 기관 검색어는 비워 두거나 최소화하라.
 - 예를 들어 학업에는 어려움이 없고 진로 무관심과 친구관계 어려움이 확인되면, primary_area와 linked_areas는 진로·심리정서 중심으로 작성하라.
 
 출력 형식:
@@ -2231,7 +2233,8 @@ def render_counseling_analysis_section() -> None:
         with c1:
             st.markdown(analysis_summary_card(summ.get("support_needed", "-"), one_line), unsafe_allow_html=True)
         with c2:
-            st.markdown(metric_card("상담에서 확인된 지원 영역", ", ".join(target_areas) if target_areas else data.get("primary_area", "-"), secondary_help), unsafe_allow_html=True)
+            area_value = ", ".join(target_areas) if target_areas else ("현재 추가 확인 영역 없음" if summ.get("support_needed") == "현재 유지" else data.get("primary_area", "-"))
+            st.markdown(metric_card("상담에서 확인된 지원 영역", area_value, secondary_help), unsafe_allow_html=True)
         st.caption("AI 결과는 자동 판정이 아니라 교사와 학교 협의체 검토를 돕는 참고자료입니다.")
 
 
@@ -2727,10 +2730,32 @@ def infer_support_areas_from_counseling_note(note: str) -> List[str]:
 
 
 def postprocess_counseling_analysis_result(data: Dict[str, Any], teacher_note: str) -> Dict[str, Any]:
-    """LLM이 1차 체크리스트 영역을 과도하게 끌고 오는 것을 막고, 상담 메모 근거 영역을 우선한다."""
+    """LLM이 1차 체크리스트 영역을 과도하게 끌고 오는 것을 막고, 상담 메모 근거 영역을 우선한다.
+
+    교사가 선택한 지원 필요 판단은 사용자 입력값이므로 AI 결과보다 우선 적용한다.
+    특히 "현재 유지"를 선택한 경우에는 AI가 상담 메모의 단어를 과도하게 해석해
+    "지원 검토 필요"로 승격하지 않도록 상태와 후속 검색 기준을 안정적으로 정리한다.
+    """
     if not isinstance(data, dict):
         return data
     data = dict(data)
+    teacher_judgment = (
+        st.session_state.get("teacher_support_judgment_input")
+        or st.session_state.get("teacher_support_judgment")
+        or ""
+    )
+    if isinstance(data.get("analysis_summary"), dict) and teacher_judgment in ["현재 유지", "추가 관찰", "지원 검토 필요", "판단 보류"]:
+        data["analysis_summary"]["support_needed"] = teacher_judgment
+        if teacher_judgment == "현재 유지":
+            data["analysis_summary"]["support_needed_reason"] = (
+                "교사의 판단에 따라 현재 지원 상태를 유지하며, 필요한 경우 추후 변화 여부를 관찰합니다."
+            )
+            data["primary_area"] = "공통"
+            data["key_signals"] = []
+            data["rag_search_queries"] = []
+            data["confirmed_support_areas"] = []
+            data["secondary_consideration_areas"] = []
+            return data
     note_areas = infer_support_areas_from_counseling_note(teacher_note)
     llm_areas: List[str] = []
     primary = normalize_area_name(data.get("primary_area"))
@@ -2791,7 +2816,11 @@ def derive_integrated_support_areas(analysis: Dict[str, Any]) -> List[str]:
 
     이전 버전은 1차 체크리스트와 심층분석 영역까지 모두 합쳐 네 영역이 과도하게 표시될 수 있었다.
     현재 버전은 confirmed_support_areas가 있으면 그것을 우선 사용하고, 없을 때만 상담 분석 결과의 primary/key_signals를 사용한다.
+    교사가 "현재 유지"로 판단한 경우에는 기관 추천용 영역을 만들지 않는다.
     """
+    summary = analysis.get("analysis_summary", {}) if isinstance(analysis, dict) else {}
+    if isinstance(summary, dict) and summary.get("support_needed") == "현재 유지":
+        return []
     target: List[str] = []
 
     def add_many(values: Any) -> None:
@@ -3285,9 +3314,14 @@ def render_rag_search_section() -> None:
     allowed = get_allowed_districts(school.get("자치구", ""), adjacency)
     target_areas_preview = derive_integrated_support_areas(analysis)
     secondary_preview = [a for a in analysis.get("secondary_consideration_areas", []) if a not in target_areas_preview]
+    support_status = (analysis.get("analysis_summary", {}) or {}).get("support_needed", "") if isinstance(analysis, dict) else ""
+    if support_status == "현재 유지":
+        st.info("상담 결과가 현재 유지로 정리되어 별도 지원기관 추천은 진행하지 않습니다. 필요 시 상담 메모를 수정한 뒤 다시 분석해 주세요.")
+        return
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(metric_card("상담에서 확인된 영역", ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-"), area_help_text("체크리스트상 함께 고려할 수 있는 영역", secondary_preview, "체크리스트상 추가 고려 영역 없음")), unsafe_allow_html=True)
+        preview_value = ", ".join(target_areas_preview) if target_areas_preview else analysis.get("primary_area", "-")
+        st.markdown(metric_card("상담에서 확인된 영역", preview_value, area_help_text("체크리스트상 함께 고려할 수 있는 영역", secondary_preview, "체크리스트상 추가 고려 영역 없음")), unsafe_allow_html=True)
     with c2:
         st.markdown(metric_card("학교 자치구", school.get("자치구", "-"), "지역 기준"), unsafe_allow_html=True)
     with c3:
@@ -3828,12 +3862,26 @@ def render_followup_workflow_sections() -> None:
 
 def chart_bar(data: pd.DataFrame, x: str, y: str, title: str = "") -> None:
     if px is None:
+        # Streamlit 기본 차트도 마우스 드래그 확대가 생길 수 있어, 가능한 경우 Plotly 경로를 우선 사용한다.
         st.bar_chart(data.set_index(x)[y])
     else:
         fig = px.bar(data, x=x, y=y, text=y, title=title)
-        fig.update_layout(height=300, margin=dict(l=10, r=10, t=35, b=10))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=35, b=10), dragmode=False)
+        fig.update_xaxes(fixedrange=True)
+        fig.update_yaxes(fixedrange=True)
         fig.update_traces(textposition="outside")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        # 대시보드용 요약 그래프는 값 확인 목적이므로 확대/축소 인터랙션을 비활성화해
+        # 사용자가 확대 후 원래 상태로 돌아가지 못하는 혼선을 줄인다.
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={
+                "displayModeBar": False,
+                "scrollZoom": False,
+                "doubleClick": False,
+                "staticPlot": False,
+            },
+        )
 
 
 def page_dashboard() -> None:
