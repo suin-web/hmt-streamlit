@@ -64,6 +64,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap');
+
+    html, body, [class*="css"], .stApp, .stMarkdown, .stText, .stButton, .stSelectbox, .stDataFrame {
+        font-family: 'Noto Sans KR', sans-serif !important;
+    }
+
+    div, span, p, h1, h2, h3, h4, h5, h6, button, input, textarea, select, table {
+        font-family: 'Noto Sans KR', sans-serif !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 
